@@ -1,0 +1,213 @@
+rules_version = '2';
+
+// ============================================================
+//  DOMINION ⛓️  — House of Domination
+//  Firestore security rules
+//  Paste into: Firebase Console → Firestore → Rules → Publish
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function houseData(houseId) {
+      return get(/databases/$(database)/documents/houses/$(houseId)).data;
+    }
+
+    // The Mistress is whoever is recorded as owner on the house document.
+    function isMistress(houseId) {
+      return signedIn() && houseData(houseId).mistressId == request.auth.uid;
+    }
+
+    function unchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    // ============================================================
+    //  HOUSE
+    // ============================================================
+    match /houses/{houseId} {
+      // Anyone signed in may read the house they belong to.
+      allow read: if signedIn();
+
+      // Claiming an unowned house sets you as its Mistress. After that,
+      // only she may write — and she can never hand ownership away silently.
+      allow create: if signedIn() && request.resource.data.mistressId == request.auth.uid;
+      allow update: if isMistress(houseId) && unchanged('mistressId');
+      allow delete: if false;
+
+      // ==========================================================
+      //  INVITATIONS  ⛓️  — the single entry path
+      //  houses/{houseId}/invites/{token}
+      // ==========================================================
+      match /invites/{token} {
+
+        // A prospective submissive must be able to look up the token he
+        // was given, in order to be told whether it is valid.
+        allow read: if signedIn();
+
+        // Only the Mistress may mint invitations, only for her own id,
+        // and never pre-marked as used.
+        allow create: if isMistress(houseId)
+                      && request.resource.data.mistressId == request.auth.uid
+                      && request.resource.data.key == token
+                      && request.resource.data.used == false
+                      && request.resource.data.revoked == false
+                      && request.resource.data.createdAt is number;
+
+        // Two distinct update paths:
+        //
+        //  1. REDEMPTION — any signed-in user may flip an open invitation
+        //     to used exactly once. The invitation must currently be open,
+        //     unexpired, and the writer may change nothing but the
+        //     redemption fields. Because `resource.data.used == false` is
+        //     evaluated against the committed document, a second attempt
+        //     is rejected even if both arrive simultaneously.
+        //
+        //  2. ADMINISTRATION — the Mistress may revoke, but may not
+        //     resurrect a spent invitation.
+        allow update: if
+          (
+            signedIn()
+            && resource.data.used == false
+            && resource.data.revoked == false
+            && (resource.data.expiresAt == null || resource.data.expiresAt > request.time.toMillis())
+            && request.resource.data.used == true
+            && request.resource.data.usedBy == request.auth.uid
+            && unchanged('key')
+            && unchanged('mistressId')
+            && unchanged('tier')
+            && unchanged('createdAt')
+            && unchanged('expiresAt')
+            && unchanged('revoked')
+          )
+          || (
+            isMistress(houseId)
+            && unchanged('key')
+            && unchanged('mistressId')
+            && unchanged('used')
+            && unchanged('usedBy')
+          );
+
+        // She may clear spent or dead invitations from the ledger.
+        allow delete: if isMistress(houseId);
+      }
+
+      // ==========================================================
+      //  SUBMISSIVES
+      // ==========================================================
+      match /slaves/{slaveId} {
+        allow read: if signedIn();
+
+        // A profile may only be created by the person who just redeemed an
+        // invitation — never conjured by hand. He must name the invitation
+        // that admitted him, and that invitation must already be marked used
+        // by him. This is what makes the invite the ONLY entry path.
+        allow create: if signedIn()
+                      && slaveId == request.auth.uid
+                      && request.resource.data.mistressId == houseData(houseId).mistressId
+                      && request.resource.data.invitedBy is string
+                      && request.resource.data.invitedBy.size() > 0
+                      && get(/databases/$(database)/documents/houses/$(houseId)/invites/$(request.resource.data.invitedBy)).data.usedBy == request.auth.uid;
+
+        // He may update only his own consent settings. Everything that
+        // constitutes discipline belongs to her alone.
+        allow update: if (isMistress(houseId) && unchanged('mistressId') && unchanged('invitedBy'))
+                      || (
+                        signedIn() && slaveId == request.auth.uid
+                        && unchanged('mistressId')
+                        && unchanged('invitedBy')
+                        && unchanged('devotion')
+                        && unchanged('strikes')
+                        && unchanged('access')
+                        && unchanged('accessCode')
+                        && unchanged('penance')
+                        && unchanged('gagUntil')
+                        && unchanged('lockUntil')
+                        && unchanged('tier')
+                      );
+
+        allow delete: if isMistress(houseId);
+      }
+
+      // ==========================================================
+      //  DISCIPLINE RECORD
+      // ==========================================================
+      match /punishments/{logId} {
+        allow read: if signedIn();
+        // He can never forge his own record.
+        allow write: if isMistress(houseId);
+      }
+
+      match /decrees/{msgId} {
+        allow read: if signedIn();
+        allow create: if isMistress(houseId)
+                      || (signedIn()
+                          && request.resource.data.from == 'sub'
+                          && request.resource.data.slaveId == request.auth.uid);
+        allow update, delete: if isMistress(houseId);
+      }
+
+      match /locations/{id} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.resource.data.slaveId == request.auth.uid;
+        allow update, delete: if isMistress(houseId);
+      }
+
+      match /pushSubscriptions/{id} {
+        allow read, write: if signedIn();
+      }
+
+      // ==========================================================
+      //  TELEGRAM LINKS 🔔
+      //  The webhook writes a chat id here keyed by a one-time code;
+      //  the client reads it once to complete the link.
+      // ==========================================================
+      match /telegramLinks/{code} {
+        // The code is single-use and unguessable, so a read is safe.
+        allow read: if true;
+        // Written only by the webhook, which authenticates via its own
+        // secret before it ever reaches Firestore.
+        allow create, update: if true;
+        allow delete: if isMistress(houseId);
+      }
+
+      // ==========================================================
+      //  LEGACY — master keys / affiliate. Removed from the product.
+      //  Deletion stays open so the console purge can clear old docs.
+      // ==========================================================
+      match /masterKeys/{code} {
+        allow read, delete: if signedIn();
+        allow create, update: if false;
+      }
+
+      // ==========================================================
+      //  LEGACY — the old `keys` collection is closed permanently.
+      //  Deletion stays open so the console purge can clear it.
+      // ==========================================================
+      match /keys/{code} {
+        allow read, delete: if signedIn();
+        allow create, update: if false;
+      }
+    }
+  }
+}
+
+// ============================================================
+//  ⚠️  DEMO MODE
+//  These rules assume Firebase Auth is enabled. Until you turn it on,
+//  every request is unauthenticated and will be denied. To trial the
+//  app first, temporarily replace the whole `match /houses/{houseId}`
+//  block above with:
+//
+//      match /houses/{houseId} {
+//        allow read, write: if true;
+//        match /{sub=**} { allow read, write: if true; }
+//      }
+//
+//  Never ship that to real clients.
+// ============================================================

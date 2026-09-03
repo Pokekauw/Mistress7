@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// ============================================================
+//  DOMINION ⛓️  — Firebase Storage rules (media rewards 👠)
+//  Paste into: Firebase Console → Storage → Rules → Publish
+// ============================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Demo posture: readable and writable, capped at 8 MB per file.
+    match /dominion-media/{houseId}/{file} {
+      allow read: if true;
+      allow write: if request.resource.size < 8 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*|video/.*|audio/.*|application/pdf');
+    }
+
+    // Production: require auth and let only the Mistress upload teasers.
+    //
+    // match /dominion-media/{houseId}/{file} {
+    //   allow read:  if request.auth != null;
+    //   allow write: if request.auth != null
+    //                && request.resource.size < 8 * 1024 * 1024;
+    // }
+  }
+}
