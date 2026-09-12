@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { money, unlockMedia, viewMedia, type Msg } from "../lib/store";
+import { ReadTicks, Stamp } from "./MessageMeta";
 
 export default function MediaBubble({
   m,
@@ -129,6 +130,16 @@ export default function MediaBubble({
               👁️ viewed {media.views}×
             </div>
           )}
+
+          {/* when it landed, and whether he has seen it */}
+          <div
+            className={`flex items-center gap-1.5 px-3 pb-2 ${
+              side === "right" ? "justify-end" : "justify-start"
+            }`}
+          >
+            <Stamp at={m.time} className="text-white/30" />
+            {side === "right" && <ReadTicks m={m} className="ml-1" />}
+          </div>
         </div>
 
         {err && (

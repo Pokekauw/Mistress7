@@ -146,6 +146,16 @@ export type Msg = {
   reqId?: string;
   media?: Media;
   time: number;
+  /**
+   * The moment the RECIPIENT actually opened the thread and saw this line.
+   * Absent = sent (✓), stamped = seen/read (✓✓). Only ever written by the
+   * party that did not send it.
+   */
+  readAt?: number;
+  /** a ritual performed on repeat: how many presses this line folds together */
+  repeat?: number;
+  /** ritual meta, so both sides can show "+4 ♥" or "already earned today" */
+  ritual?: { id: string; earned: boolean; dev: number };
 };
 
 export type { Invite } from "./invites";
@@ -201,12 +211,19 @@ export type Dungeon = {
   chatBg?: ChatBg;
 };
 
+/** a live "he is writing / she is writing" heartbeat, one per party */
+export type TypingBeat = { sub?: number | null; mistress?: number | null };
+
 export type State = {
   dungeon: Dungeon;
   slaves: Slave[];
   messages: Msg[];
   invites: Invite[];
   events: { id: string; text: string; tone: "gold" | "red" | "green" | "muted"; time: number }[];
+  /** typing heartbeats, keyed by slaveId — expires on its own, see TYPING_TTL_MS */
+  typing?: Record<string, TypingBeat>;
+  /** when the Mistress's deck was last open — he is shown "last seen …" */
+  mistressSeenAt?: number;
 };
 
 export type Session = { role: "mistress" | "sub" | null; slaveId: string | null };
@@ -262,6 +279,116 @@ export const DEFAULT_ATTENTION_HOURS = 12;
 export const ATTENTION_PENALTY = 10;
 /** a ritual button earns its devotion at most once per rolling 24h */
 export const RITUAL_COOLDOWN_MS = 24 * 3600 * 1000;
+/** repeating the same ritual inside this window folds into one chat line */
+export const RITUAL_MERGE_MS = 90 * 1000;
+
+/* ===================== presence · typing · read ===================== */
+/** a "…is writing" flag stays up this long after the last keystroke */
+export const TYPING_TTL_MS = 6000;
+/** how often a party may rewrite its own heartbeat (keeps writes cheap) */
+const TYPING_THROTTLE_MS = 2200;
+/** how often a party may rewrite "last seen" */
+const PRESENCE_THROTTLE_MS = 45_000;
+
+const beatAt: Record<string, number> = {};
+
+/**
+ * He is writing / she is writing. Called on every keystroke but only writes to
+ * the store once every couple of seconds — a Firestore write per letter would
+ * be absurd, and the flag lapses on its own anyway (TYPING_TTL_MS).
+ */
+export function setTyping(slaveId: string, who: "sub" | "mistress", on: boolean) {
+  const key = `${who}:${slaveId}`;
+  const now = Date.now();
+  const current = state.typing?.[slaveId]?.[who] ?? 0;
+
+  if (on) {
+    if (now - (beatAt[key] || 0) < TYPING_THROTTLE_MS) return;
+    beatAt[key] = now;
+  } else {
+    if (!current) return; // already quiet — never write for nothing
+    delete beatAt[key];
+  }
+
+  update((s) => ({
+    ...s,
+    typing: { ...(s.typing || {}), [slaveId]: { ...(s.typing?.[slaveId] || {}), [who]: on ? now : null } },
+  }));
+}
+
+/** is the other party mid-sentence right now? */
+export function isTyping(s: State, slaveId: string, who: "sub" | "mistress") {
+  const at = s.typing?.[slaveId]?.[who];
+  return typeof at === "number" && Date.now() - at < TYPING_TTL_MS;
+}
+
+/**
+ * The Mistress's deck pings this while it is open, so he can see that she is
+ * about. Throttled: at most one write every 45 s.
+ */
+export function touchMistressPresence(force = false) {
+  const now = Date.now();
+  const last = state.mistressSeenAt || 0;
+  if (!force && now - last < PRESENCE_THROTTLE_MS) return;
+  if (document.visibilityState === "hidden") return;
+  update((s) => ({ ...s, mistressSeenAt: now }));
+}
+
+/** His app pings this while it is open — drives "last seen" on her deck. */
+export function touchSubPresence(slaveId: string, force = false) {
+  const s = getSlave(slaveId);
+  if (!s) return;
+  const now = Date.now();
+  if (!force && now - (s.lastSeen || 0) < PRESENCE_THROTTLE_MS) return;
+  if (document.visibilityState === "hidden") return;
+  update((st) => mapSlave(st, slaveId, (x) => ({ ...x, lastSeen: now })));
+}
+
+/**
+ * Stamp every line the OTHER party sent as read. Called when a thread is on
+ * screen and the document is actually visible — reading is a deliberate act,
+ * not something a background tab does. Writes only when something is unstamped.
+ */
+export function markThreadRead(slaveId: string, reader: "sub" | "mistress") {
+  if (document.visibilityState === "hidden") return;
+  const sender = reader === "sub" ? "mistress" : "sub";
+  const now = Date.now();
+  const pending = state.messages.some(
+    (m) => m.slaveId === slaveId && m.from === sender && !m.readAt
+  );
+  if (!pending) return;
+  update((s) => ({
+    ...s,
+    messages: s.messages.map((m) =>
+      m.slaveId === slaveId && m.from === sender && !m.readAt ? { ...m, readAt: now } : m
+    ),
+  }));
+}
+
+/** "21:04" — the short stamp under a bubble */
+export function clockOf(t: number) {
+  return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** "12 Sep 21:04" for anything older than today, else just the clock */
+export function stampOf(t: number) {
+  const d = new Date(t);
+  const today = new Date();
+  const sameDay =
+    d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+  return sameDay ? clockOf(t) : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${clockOf(t)}`;
+}
+
+/** "just now" · "4m ago" · "3h ago" · "2d ago" */
+export function seenAgo(t?: number | null) {
+  if (!t) return "";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+}
 
 export const attentionWindowMs = (s: Slave) =>
   (s.attentionHours && s.attentionHours > 0 ? s.attentionHours : DEFAULT_ATTENTION_HOURS) * 3600_000;
@@ -388,7 +515,14 @@ export function normaliseState(s: State): State {
   return {
     ...s,
     invites,
+    /* presence & typing: Firestore's undefined→null cleaning can leave stray
+       nulls behind, and a stale writer may leave a very old heartbeat */
+    typing: s.typing || {},
     dungeon: { ...s.dungeon, plan: s.dungeon?.plan ?? DEFAULT_PLAN },
+    messages: (s.messages || []).map((m) => ({
+      ...m,
+      readAt: typeof m.readAt === "number" ? m.readAt : undefined,
+    })),
     slaves: (s.slaves || []).map((x) => {
       let code = x.accessCode;
       if (!code || used.has(code)) {
@@ -1205,9 +1339,12 @@ export const RITUALS = [
 export type RitualResult = { earned: boolean; dev: number; resetsAt: number };
 
 /**
- * A ritual may be performed as often as he likes (it is always activity that
- * winds the attention timer back), but each button earns its devotion at most
- * once per rolling 24 hours — he cannot button-mash his way to ♥100.
+ * A ritual may be performed as often as he likes — kneeling is not rationed —
+ * and EVERY press is a real act: it winds the attention-debt timer back and it
+ * reaches her thread. What is rationed is the reward: each button earns its
+ * devotion at most once per rolling 24 hours, so he cannot button-mash his way
+ * to ♥100. Presses on cooldown still show up, folded into one line while he
+ * keeps at it (see RITUAL_MERGE_MS) so her thread is not flooded.
  */
 export function subRitual(slaveId: string, id: string): RitualResult | null {
   const r = RITUALS.find((x) => x.id === id);
@@ -1233,16 +1370,47 @@ export function subRitual(slaveId: string, id: string): RitualResult | null {
       };
     });
     const who = next.slaves.find((x) => x.id === slaveId)!;
-    if (result.earned) {
-      /* the ritual — and its chat line — is only written when it actually counts
-         for devotion; cooldown presses still wind the activity timer back,
-         without spamming her thread with repeated kneeling lines */
-      next = pushMsg(next, { slaveId, from: "sub", kind: "decree", title: r.title, text: `${who.name} ${r.line}` });
-      next = pushEvent(next, `${r.icon} ${who.name} — ${r.title} · devotion +${r.dev}`, "green");
-    }
+    next = pushRitual(next, slaveId, who.name, r, result.earned);
+    if (result.earned) next = pushEvent(next, `${r.icon} ${who.name} — ${r.title} · devotion +${r.dev}`, "green");
     return next;
   });
   return result;
+}
+
+/** fold rapid repeats of the same ritual into the line already on her screen */
+function pushRitual(
+  s: State,
+  slaveId: string,
+  name: string,
+  r: (typeof RITUALS)[number],
+  earned: boolean
+): State {
+  const now = Date.now();
+  const last = s.messages[s.messages.length - 1];
+  if (last && last.slaveId === slaveId && last.ritual?.id === r.id && now - last.time < RITUAL_MERGE_MS) {
+    return {
+      ...s,
+      messages: s.messages.map((m, i) =>
+        i === s.messages.length - 1
+          ? {
+              ...m,
+              time: now,
+              repeat: (m.repeat || 1) + 1,
+              /* if the fresh day begins mid-flurry the line still shows the gain */
+              ritual: { id: r.id, earned: earned || Boolean(m.ritual?.earned), dev: r.dev },
+            }
+          : m
+      ),
+    };
+  }
+  return pushMsg(s, {
+    slaveId,
+    from: "sub",
+    kind: "decree",
+    title: r.title,
+    text: `${name} ${r.line}`,
+    ritual: { id: r.id, earned, dev: r.dev },
+  });
 }
 
 /**
