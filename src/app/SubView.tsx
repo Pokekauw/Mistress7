@@ -8,6 +8,8 @@ import StatusBanner from "../components/StatusBanner";
 import CommandLog from "../components/CommandLog";
 import TelegramPanel from "../components/TelegramPanel";
 import TelegramInline from "../components/TelegramInline";
+import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
+import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import {
   avatarFor,
   bgStyle,
@@ -16,9 +18,12 @@ import {
   declineDemand,
   fileToAttachment,
   HARD_LIMIT_OPTIONS,
+  isTyping,
+  markThreadRead,
   openLocReq,
   reverseGeocode,
   setFixPlace,
+  setTyping,
   shareLocation,
   submitProof,
   isGagged,
@@ -35,6 +40,7 @@ import {
   subSay,
   timeLeft,
   toggleLimit,
+  touchSubPresence,
   useStore,
   useTick,
 } from "../lib/store";
@@ -51,7 +57,9 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
-  const [sheet, setSheet] = useState<null | "tribute" | "limits" | "proof" | "key" | "telegram">(null);
+  const [sheet, setSheet] = useState<
+    null | "tribute" | "limits" | "proof" | "key" | "telegram" | "rules" | "guide"
+  >(null);
   const [amt, setAmt] = useState(150);
   const [proofFile, setProofFile] = useState<{
     name: string;
@@ -69,11 +77,61 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   const fileRef = useRef<HTMLInputElement>(null);
   const [holdPct, setHoldPct] = useState(0);
   const holdRef = useRef<number | null>(null);
-  const end = useRef<HTMLDivElement>(null);
+  /* the chat window is a fixed box: it scrolls inside itself, it never grows */
+  const threadRef = useRef<HTMLDivElement>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unread, setUnread] = useState(0);
+  const mistressSeenAt = useStore((s) => s.mistressSeenAt);
+  const sheIsWriting = useStore((s) => (slave ? isTyping(s, slave.id, "mistress") : false));
 
+  const stickToBottom = (smooth = false) => {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setUnread(0);
+    setAtBottom(true);
+  };
+
+  /* new lines: follow them down only if he is already at the bottom */
+  const booted = useRef(false);
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [msgs.length]);
+    const el = threadRef.current;
+    if (!el) return;
+    if (!booted.current) {
+      booted.current = true;
+      stickToBottom(false);
+      return;
+    }
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    if (near) stickToBottom(true);
+    else setUnread((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msgs.length, sheIsWriting]);
+
+  /* opening the thread — and staying in it — is what "read" means */
+  useEffect(() => {
+    if (!slave) return;
+    markThreadRead(slave.id, "sub");
+    touchSubPresence(slave.id, true);
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      markThreadRead(slave.id, "sub");
+      touchSubPresence(slave.id, true);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    const beat = window.setInterval(() => {
+      markThreadRead(slave.id, "sub");
+      touchSubPresence(slave.id);
+    }, 15_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      clearInterval(beat);
+      setTyping(slave.id, "sub", false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slave?.id, msgs.length]);
+
+
 
   /* profile deleted, or she took the key — enforced live from her device */
   const shut = !slave || slave.access !== "active";
@@ -231,42 +289,73 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
     <div className="page-canvas relative flex min-h-screen flex-col">
       <div className="relative z-10 mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-4">
         {/* header */}
-        <header className="flex items-center gap-3 py-4">
-          <AvatarPlate name={dungeon.name} honorific={dungeon.honorific} src={dungeon.avatarUrl} />
+        <header className="flex items-start gap-3 py-4">
+          <div className="min-w-0">
+            <AvatarPlate name={dungeon.name} honorific={dungeon.honorific} src={dungeon.avatarUrl} />
+          </div>
           <span className="flex-1" />
-          <ConnBadge />
-          <button
-            onClick={() => setSheet("key")}
-            className="hidden text-right sm:block"
-            title="Your permanent code"
-          >
-            <div className="label">You 🖤</div>
-            <div className="font-display text-[1rem] leading-none text-white/70">
-              {slave.name} · <span className="text-brass-soft/80">{rankOf(slave.devotion)}</span>
+
+          <div className="flex flex-col items-end gap-1.5">
+            {/* the collar line: who he is, and the way out */}
+            <div className="flex items-center gap-2">
+              <ConnBadge />
+              <button
+                onClick={() => setSheet("key")}
+                className="hidden text-right sm:block"
+                title="Your permanent code"
+              >
+                <div className="label">You 🖤</div>
+                <div className="font-display text-[1rem] leading-none text-white/70">
+                  {slave.name} · <span className="text-brass-soft/80">{rankOf(slave.devotion)}</span>
+                </div>
+                <div className="mt-0.5 font-mono text-[9.5px] tracking-[0.16em] text-brass/60">
+                  🗝️ {slave.accessCode}
+                </div>
+              </button>
+              <button
+                onClick={() => setSheet("telegram")}
+                title="Telegram alerts"
+                className={`rounded-full border px-3 py-1.5 text-[11.5px] ${
+                  slave.telegram ? "border-emerald-400/40 text-emerald-200" : "border-white/12 text-white/55"
+                }`}
+              >
+                {slave.telegram ? "🔔" : "🔕"}
+              </button>
+              <button
+                onClick={() => setSheet("limits")}
+                className="rounded-full border border-white/12 px-3 py-1.5 text-[11.5px] text-white/55"
+              >
+                Limits
+              </button>
+              <button
+                onClick={() => {
+                  setSession({ role: null, slaveId: null });
+                  go("#/");
+                }}
+                className="rounded-full border border-white/12 px-3 py-1.5 text-[11.5px] text-white/55"
+              >
+                Exit
+              </button>
             </div>
-            <div className="mt-0.5 font-mono text-[9.5px] tracking-[0.16em] text-brass/60">🗝️ {slave.accessCode}</div>
-          </button>
-          <button
-            onClick={() => setSheet("telegram")}
-            title="Telegram alerts"
-            className={`rounded-full border px-3 py-1.5 text-[11.5px] ${
-              slave.telegram ? "border-emerald-400/40 text-emerald-200" : "border-white/12 text-white/55"
-            }`}
-          >
-            {slave.telegram ? "🔔" : "🔕"}
-          </button>
-          <button onClick={() => setSheet("limits")} className="rounded-full border border-white/12 px-3 py-1.5 text-[11.5px] text-white/55">
-            Limits
-          </button>
-          <button
-            onClick={() => {
-              setSession({ role: null, slaveId: null });
-              go("#/");
-            }}
-            className="rounded-full border border-white/12 px-3 py-1.5 text-[11.5px] text-white/55"
-          >
-            Exit
-          </button>
+
+            {/* just beneath Limits and Exit */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSheet("rules")}
+                title={`${dungeon.honorific}'s house rules`}
+                className="rounded-full border border-brass/35 bg-brass/8 px-3 py-1.5 text-[11.5px] text-brass-soft/90 transition hover:border-brass/70"
+              >
+                📜 House Rules
+              </button>
+              <button
+                onClick={() => setSheet("guide")}
+                title="How this app works for a slave"
+                className="rounded-full border border-violet-400/35 bg-violet-500/10 px-3 py-1.5 text-[11.5px] text-violet-100/90 transition hover:border-violet-400/70"
+              >
+                🧭 Guide
+              </button>
+            </div>
+          </div>
         </header>
 
         {/* conditions */}
@@ -362,16 +451,34 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
           </div>
         ))}
 
-        {/* thread */}
-        <div
-          className="thin-scroll mt-3 flex-1 space-y-2.5 overflow-y-auto rounded-xl border border-white/8 p-3"
-          style={bgStyle(chatBgFor(slave, dungeon))}
-        >
-          {msgs.map((m) => {
+        {/* thread — a fixed window: it scrolls inside itself, it never grows */}
+        <div className="relative mt-3 flex h-[380px] shrink-0 flex-col overflow-hidden rounded-xl border border-white/8 sm:h-[440px]">
+          <PresenceBar
+            name={dungeon.honorific}
+            live
+            lastSeenAt={mistressSeenAt}
+            avatar={<Avatar size={16} src={dungeon.avatarUrl} />}
+          />
+
+          <div
+            ref={threadRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const near = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+              setAtBottom(near);
+              if (near) setUnread(0);
+            }}
+            className="thin-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3"
+            style={bgStyle(chatBgFor(slave, dungeon))}
+          >
+            {msgs.map((m) => {
             if (m.kind === "system" || m.kind === "refusal")
               return (
                 <div key={m.id} className="rounded-lg border-l-2 border-white/20 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white/55">
                   {m.text}
+                  <div className="mt-1">
+                    <Stamp at={m.time} className="text-white/25" />
+                  </div>
                 </div>
               );
             if (m.kind === "decree")
@@ -389,6 +496,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                       }`}
                     >
                       {m.title}
+                      {m.repeat && m.repeat > 1 ? <span className="ml-1.5 text-white/45">×{m.repeat}</span> : ""}
                     </div>
                   )}
                   <div
@@ -397,6 +505,25 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                     }`}
                   >
                     {m.text}
+                  </div>
+                  {m.ritual && (
+                    <div
+                      className={`mt-1.5 inline-block rounded-full border px-2 py-0.5 font-mono text-[9px] tracking-[0.1em] uppercase ${
+                        m.ritual.earned
+                          ? "border-brass/40 bg-brass/12 text-brass-soft"
+                          : "border-white/12 text-white/40"
+                      }`}
+                    >
+                      {m.ritual.earned
+                        ? `♥ +${m.ritual.dev} devotion`
+                        : `♥ already earned today · pays again in ${timeLeft(
+                            ritualState(slave, m.ritual.id).resetsAt - Date.now()
+                          )}`}
+                    </div>
+                  )}
+                  <div className="mt-1.5 flex items-center justify-center gap-1.5">
+                    <Stamp at={m.time} className="text-white/30" />
+                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
                   </div>
                 </div>
               );
@@ -424,6 +551,10 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                   </div>
                   {offered && <div className="mt-0.5 text-[10.5px] text-amber-100/70">awaiting her judgement ⏳</div>}
                   {rejected && <div className="mt-0.5 text-[10.5px] text-rose-100/65">not recorded</div>}
+                  <div className="mt-1 flex items-center justify-center gap-1.5">
+                    <Stamp at={m.time} className="text-white/30" />
+                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
+                  </div>
                 </div>
               );
             }
@@ -431,6 +562,9 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
               return (
                 <div key={m.id} className="text-center text-[11.5px] text-white/40">
                   💰 tribute demanded {money(m.amount || 0)} · {m.status}
+                  <div className="mt-0.5">
+                    <Stamp at={m.time} className="text-white/25" />
+                  </div>
                 </div>
               );
             if (m.kind === "locreq")
@@ -455,13 +589,20 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                         ? "you failed — penalised ⛓️"
                         : `${timeLeft((m.deadline || 0) - Date.now())} left ⏳`}
                   </div>
+                  <div className="mt-1">
+                    <Stamp at={m.time} className="text-white/35" />
+                  </div>
                 </div>
               );
             if (m.kind === "location" && m.fix)
               return (
-                <div key={m.id} className="flex justify-end">
+                <div key={m.id} className="flex flex-col items-end">
                   <div className="w-full max-w-[85%]">
                     <LocationCard fix={m.fix} compact />
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5 pr-1">
+                    <Stamp at={m.time} className="text-white/30" />
+                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
                   </div>
                 </div>
               );
@@ -493,26 +634,47 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                     </div>
                   )}
                   {m.text && <p className="mt-2 text-[12.5px] text-white/70">{m.text}</p>}
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <Stamp at={m.time} className="text-white/30" />
+                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
+                  </div>
                 </div>
               );
             const mine = m.from === "sub";
             return (
-              <div key={m.id} className={`flex items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
-                {!mine && <Avatar size={30} src={dungeon.avatarUrl} />}
-                <div
-                  className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug ${
-                    mine
-                      ? "rounded-br-md border border-white/10 bg-white/[0.06] text-white/80"
-                      : "font-display rounded-bl-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
-                  }`}
-                >
-                  {m.text}
+              <div key={m.id} className={`flex flex-col ${mine ? "items-end" : "items-start"}`}>
+                <div className={`flex w-full items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
+                  {!mine && <Avatar size={30} src={dungeon.avatarUrl} />}
+                  <div
+                    className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug ${
+                      mine
+                        ? "rounded-br-md border border-white/10 bg-white/[0.06] text-white/80"
+                        : "font-display rounded-bl-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
+                    }`}
+                  >
+                    {m.text}
+                  </div>
+                  {mine && <SlaveAvatar size={28} src={avatarFor(slave, dungeon)} name={slave.name} />}
                 </div>
-                {mine && <SlaveAvatar size={28} src={avatarFor(slave, dungeon)} name={slave.name} />}
+                <div className={`mt-1 flex items-center gap-1.5 ${mine ? "pr-9" : "pl-9"}`}>
+                  <Stamp at={m.time} className="text-white/30" />
+                  {mine && <ReadTicks m={m} className="ml-1" />}
+                </div>
               </div>
             );
-          })}
-          <div ref={end} />
+            })}
+
+            {sheIsWriting && <TypingDots label={dungeon.honorific} align="left" />}
+          </div>
+
+          {!atBottom && unread > 0 && (
+            <button
+              onClick={() => stickToBottom(true)}
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-brass/45 bg-black/85 px-3.5 py-1.5 font-mono text-[10px] tracking-[0.14em] text-brass-soft uppercase shadow-lg backdrop-blur transition hover:border-brass"
+            >
+              ↓ {unread} new
+            </button>
+          )}
         </div>
 
         {err && <div className="mt-2 rounded-lg border border-rose-400/35 bg-rose-950/40 px-4 py-2.5 text-[12.5px] text-rose-100">{err}</div>}
@@ -539,7 +701,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
           </div>
         )}
 
-        {/* rituals — each button earns its devotion at most once per 24h */}
+        {/* rituals — press as often as he likes; each button pays ♥ once a day */}
         <div className="thin-scroll mt-3 flex gap-2 overflow-x-auto pb-1">
           {RITUALS.map((r) => {
             const st = ritualState(slave, r.id);
@@ -549,28 +711,39 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                 key={r.id}
                 onClick={() => {
                   const res = subRitual(slave.id, r.id);
-                  if (res && !res.earned) {
-                    setNote(
-                      `${r.icon} ${r.label} has already earned devotion today · available again in ${timeLeft(
-                        res.resetsAt - Date.now()
-                      )}`
-                    );
-                    setTimeout(() => setNote(""), 3400);
-                  }
+                  if (!res) return;
+                  setNote(
+                    res.earned
+                      ? `${r.icon} ${r.label} — devotion +${res.dev} ♥ · it pays again in ${timeLeft(
+                          res.resetsAt - Date.now()
+                        )}`
+                      : `${r.icon} ${r.label} — she has seen it. The ♥ was already earned today; it pays again in ${timeLeft(
+                          res.resetsAt - Date.now()
+                        )}`
+                  );
+                  setTimeout(() => setNote(""), 3400);
                 }}
-                title={cooling ? `Devotion already earned · again in ${timeLeft(st.resetsAt - Date.now())}` : `+${r.dev} devotion once per day`}
+                title={
+                  cooling
+                    ? `Devotion already earned today — press as often as you like · +${r.dev} ♥ again in ${timeLeft(
+                        st.resetsAt - Date.now()
+                      )}`
+                    : `+${r.dev} ♥ once per day · press as often as you like`
+                }
                 className={`shrink-0 rounded-full border px-3.5 py-2 text-[12px] transition active:scale-95 ${
                   cooling
-                    ? "border-white/8 bg-white/[0.02] text-white/40 hover:border-amber-400/35"
-                    : "border-white/12 bg-white/[0.04] text-white/70 hover:border-brass/40 hover:text-brass-soft"
+                    ? "border-amber-400/20 bg-white/[0.02] text-white/45 hover:border-amber-400/50 hover:text-amber-100"
+                    : "border-brass/40 bg-brass/8 text-brass-soft hover:border-brass/70"
                 }`}
               >
                 <span className="mr-1.5 opacity-70">{r.icon}</span>
                 {r.label}
-                {cooling && (
-                  <span className="ml-1.5 font-mono text-[9.5px] text-amber-200/85">
+                {cooling ? (
+                  <span className="ml-1.5 font-mono text-[9.5px] text-amber-200/70">
                     ♥✓ {timeLeft(st.resetsAt - Date.now())}
                   </span>
+                ) : (
+                  <span className="ml-1.5 font-mono text-[9.5px] text-brass/80">♥+{r.dev}</span>
                 )}
               </button>
             );
@@ -604,8 +777,16 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
         <div className="mt-2 flex gap-2">
           <input
             value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (!gagged) setTyping(slave.id, "sub", e.target.value.trim().length > 0);
+            }}
+            onBlur={() => setTyping(slave.id, "sub", false)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              send();
+              setTyping(slave.id, "sub", false);
+            }}
             placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...`}
             className={`flex-1 rounded-full border px-4 py-3 text-[15px] outline-none transition ${
               gagged ? "border-amber-400/50 bg-amber-500/10 text-amber-100 placeholder:text-amber-200/60" : "border-white/12 bg-black/40 focus:border-brass/50"
@@ -805,6 +986,12 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
       )}
 
       {sheet === "telegram" && <TelegramPanel slave={slave} onClose={() => setSheet(null)} />}
+
+      {/* her laws, readable at any hour */}
+      {sheet === "rules" && <HouseRulesSheet dungeon={dungeon} onClose={() => setSheet(null)} />}
+
+      {/* how the machine works, from his side of the collar */}
+      {sheet === "guide" && <GuideSheet dungeon={dungeon} onClose={() => setSheet(null)} />}
 
       {/* permanent code sheet */}
       {sheet === "key" && (

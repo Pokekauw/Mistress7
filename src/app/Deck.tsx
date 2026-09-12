@@ -12,6 +12,7 @@ import { planRequiredFor } from "../lib/plans";
 import { botUrl, resolveBotUsername } from "../lib/telegram";
 import { HOUSE_ID, isFirebase } from "../firebase";
 import SlaveDrawer from "../components/SlaveDrawer";
+import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import StrikeModal from "../components/StrikeModal";
 import PunishmentWheel from "../components/PunishmentWheel";
 import {
@@ -41,6 +42,10 @@ import {
   isGagged,
   isLocked,
   judgeProof,
+  isTyping,
+  markThreadRead,
+  setTyping,
+  touchMistressPresence,
   generateInvite,
   revokeInvite,
   deleteInvite,
@@ -80,6 +85,7 @@ function Spark({ data }: { data: number[] }) {
 
 function SlaveCard({ s, on, onClick, avatar }: { s: Slave; on: boolean; onClick: () => void; avatar: string }) {
   const debt = attentionDebt(s);
+  const writing = useStore((st) => isTyping(st, s.id, "sub"));
   return (
     <button
       onClick={onClick}
@@ -100,6 +106,11 @@ function SlaveCard({ s, on, onClick, avatar }: { s: Slave; on: boolean; onClick:
               <span className={`truncate font-mono text-[12.5px] ${s.access === "active" ? "text-white/90" : "text-white/40"}`}>
                 {s.name}
               </span>
+              {writing && (
+                <span title={`${s.name} is writing…`} className="animate-pulse text-[10px] leading-none">
+                  ✍️
+                </span>
+              )}
             </div>
             <div className="label mt-0.5">
               {s.tier} · {rankOf(s.devotion)}
@@ -156,7 +167,10 @@ function Thread({ slave }: { slave: Slave }) {
   const dungeon = useStore((s) => s.dungeon);
   const [text, setText] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
-  const end = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unread, setUnread] = useState(0);
+  const heIsWriting = useStore((s) => isTyping(s, slave.id, "sub"));
 
   /* demands that currently have a tribute offer waiting on her verdict */
   const offerByDemand = useMemo(() => {
@@ -167,19 +181,70 @@ function Thread({ slave }: { slave: Slave }) {
     return map;
   }, [all]);
 
+  const stickToBottom = (smooth = false) => {
+    const el = scroller.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setUnread(0);
+    setAtBottom(true);
+  };
+
+  const booted = useRef(false);
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
-  }, [msgs.length]);
+    const el = scroller.current;
+    if (!el) return;
+    if (!booted.current) {
+      /* opening a chat lands on the newest line, always */
+      booted.current = true;
+      stickToBottom(false);
+      return;
+    }
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (near) stickToBottom(true);
+    else setUnread((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msgs.length, heIsWriting]);
+
+  /* she is looking at the thread: that is what marks his lines as seen */
+  useEffect(() => {
+    markThreadRead(slave.id, "mistress");
+    const onVis = () => document.visibilityState === "visible" && markThreadRead(slave.id, "mistress");
+    document.addEventListener("visibilitychange", onVis);
+    const beat = window.setInterval(() => markThreadRead(slave.id, "mistress"), 15_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      clearInterval(beat);
+      setTyping(slave.id, "mistress", false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slave.id, msgs.length]);
 
   const send = () => {
     if (!text.trim()) return;
     sendMistressText(slave.id, text.trim());
     setText("");
+    setTyping(slave.id, "mistress", false);
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col" style={bgStyle(chatBgFor(slave, dungeon))}>
-      <div className="thin-scroll flex-1 space-y-2.5 overflow-y-auto p-4">
+    <div className="relative flex h-full min-h-0 flex-col" style={bgStyle(chatBgFor(slave, dungeon))}>
+      <PresenceBar
+        name={slave.name}
+        live
+        lastSeenAt={slave.lastSeen}
+        avatar={<SlaveAvatar size={16} src={avatarFor(slave, dungeon)} name={slave.name} />}
+      />
+
+      <div
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+          setAtBottom(near);
+          if (near) setUnread(0);
+        }}
+        className="thin-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4"
+      >
         {msgs.length === 0 && <p className="pt-8 text-center text-[13px] text-white/30">Nothing has been said yet. 🖤</p>}
         {msgs.map((m) => {
           if (m.kind === "system" || m.kind === "refusal")
@@ -191,6 +256,10 @@ function Thread({ slave }: { slave: Slave }) {
                 }`}
               >
                 {m.text}
+                <div className="mt-1 flex items-center gap-1.5">
+                  <Stamp at={m.time} className="text-white/25" />
+                  {m.from === "mistress" && <ReadTicks m={m} />}
+                </div>
               </div>
             );
           if (m.kind === "decree")
@@ -209,6 +278,7 @@ function Thread({ slave }: { slave: Slave }) {
                   >
                     {m.title}
                     {m.from === "mistress" ? `: ${slave.name}` : ""}
+                    {m.repeat && m.repeat > 1 ? <span className="ml-1.5 text-white/45">×{m.repeat}</span> : ""}
                   </div>
                 )}
                 <div
@@ -217,6 +287,19 @@ function Thread({ slave }: { slave: Slave }) {
                   }`}
                 >
                   {m.text}
+                </div>
+                {m.ritual && (
+                  <div
+                    className={`mt-1.5 inline-block rounded-full border px-2 py-0.5 font-mono text-[9px] tracking-[0.1em] uppercase ${
+                      m.ritual.earned ? "border-brass/40 bg-brass/12 text-brass-soft" : "border-white/12 text-white/40"
+                    }`}
+                  >
+                    {m.ritual.earned ? `♥ +${m.ritual.dev} devotion` : "♥ already earned today"}
+                  </div>
+                )}
+                <div className="mt-1.5 flex items-center justify-center gap-1.5">
+                  <Stamp at={m.time} className="text-white/30" />
+                  {m.from === "mistress" && <ReadTicks m={m} className="ml-1" />}
                 </div>
               </div>
             );
@@ -265,6 +348,10 @@ function Thread({ slave }: { slave: Slave }) {
                   </div>
                 )}
                 {rejected && <div className="mt-0.5 text-[10.5px] text-rose-100/60">not on record</div>}
+                <div className="mt-1.5 flex items-center justify-center gap-1.5">
+                  <Stamp at={m.time} className="text-white/30" />
+                  {m.from === "mistress" && <ReadTicks m={m} className="ml-1" />}
+                </div>
               </div>
             );
           }
@@ -282,6 +369,9 @@ function Thread({ slave }: { slave: Slave }) {
                         ? "tribute offered · accept it below ⬇"
                         : "awaiting payment"}
                 </span>
+                <div className="mt-0.5">
+                  <Stamp at={m.time} className="text-white/25" />
+                </div>
               </div>
             );
           }
@@ -311,14 +401,21 @@ function Thread({ slave }: { slave: Slave }) {
                         ? "Closing…"
                         : `${timeLeft((m.deadline || 0) - Date.now())} remaining ⏳`}
                 </div>
+                <div className="mt-1 flex items-center justify-center gap-1.5">
+                  <Stamp at={m.time} className="text-white/35" />
+                  <ReadTicks m={m} className="ml-1" />
+                </div>
               </div>
             );
           }
           if (m.kind === "location" && m.fix)
             return (
-              <div key={m.id} className="flex justify-start">
+              <div key={m.id} className="flex flex-col items-start">
                 <div className="w-full max-w-[85%]">
                   <LocationCard fix={m.fix} compact />
+                </div>
+                <div className="mt-1 pl-1">
+                  <Stamp at={m.time} className="text-white/30" />
                 </div>
               </div>
             );
@@ -386,13 +483,27 @@ function Thread({ slave }: { slave: Slave }) {
             </div>
           );
         })}
-        <div ref={end} />
+
+        {heIsWriting && <TypingDots label={slave.name} align="left" />}
       </div>
+
+      {!atBottom && unread > 0 && (
+        <button
+          onClick={() => stickToBottom(true)}
+          className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full border border-brass/45 bg-black/85 px-3.5 py-1.5 font-mono text-[10px] tracking-[0.14em] text-brass-soft uppercase shadow-lg backdrop-blur transition hover:border-brass"
+        >
+          ↓ {unread} new
+        </button>
+      )}
 
       <div className="flex gap-2 border-t border-white/8 p-3">
         <input
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setTyping(slave.id, "mistress", e.target.value.trim().length > 0);
+          }}
+          onBlur={() => setTyping(slave.id, "mistress", false)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder={`Address ${slave.name}…`}
           className="flex-1 rounded-full border border-white/12 bg-black/40 px-4 py-2.5 text-[14px] outline-none focus:border-brass/50"
@@ -1074,6 +1185,18 @@ export default function Deck({ go }: { go: (r: string) => void }) {
   const dungeon = useStore((s) => s.dungeon);
   const events = useStore((s) => s.events);
 
+  /* she is here — her submissives are shown a live "last seen" from this */
+  useEffect(() => {
+    touchMistressPresence(true);
+    const beat = window.setInterval(() => touchMistressPresence(), 20_000);
+    const onVis = () => document.visibilityState === "visible" && touchMistressPresence(true);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(beat);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
   const [tab, setTab] = useState<"roster" | "invites" | "master" | "ledger" | "house">("roster");
   const [sel, setSel] = useState<string[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -1347,7 +1470,7 @@ export default function Deck({ go }: { go: (r: string) => void }) {
                         ×
                       </button>
                     </div>
-                    <div className="h-[340px]">
+                    <div className="h-[340px] sm:h-[380px]">
                       <Thread slave={open} />
                     </div>
                   </div>
