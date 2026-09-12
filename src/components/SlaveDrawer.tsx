@@ -1,20 +1,27 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ACCESS_LOOK,
   attentionDebt,
+  attentionDeadline,
   avatarFor,
   bgStyle,
   chatBgFor,
+  clearChat,
+  DEFAULT_ATTENTION_HOURS,
   fireCommand,
   has,
   setAccess,
   unlinkTelegram,
+  setAttentionHours,
   setSlaveAvatar,
   setSlaveChatBg,
   judgeProof,
+  judgeTribute,
   money,
   rankOf,
   removeSlave,
+  restartAttention,
+  timeLeft,
   useStore,
   useTick,
   type Slave,
@@ -62,7 +69,21 @@ export default function SlaveDrawer({
     [msgs, slave.id]
   );
   const pendingProofs = proofs.filter((p) => p.verdict === "pending");
+  /* tributes waiting on her accept / reject */
+  const tributeOffers = useMemo(
+    () =>
+      msgs
+        .filter((m) => m.slaveId === slave.id && m.kind === "tribute" && m.verdict === "pending")
+        .sort((a, b) => b.time - a.time),
+    [msgs, slave.id]
+  );
   const debt = attentionDebt(slave);
+  const hours = slave.attentionHours || DEFAULT_ATTENTION_HOURS;
+  const debtLeft = attentionDeadline(slave) - Date.now();
+
+  /* local draft for the attention-window slider — commits on release */
+  const [draftHours, setDraftHours] = useState(hours);
+  useEffect(() => setDraftHours(hours), [hours]);
 
   const beat = (m: string, tone: "gold" | "red" = "gold") => {
     flash(m, tone);
@@ -102,7 +123,9 @@ export default function SlaveDrawer({
                 style={{ width: `${debt}%` }}
               />
             </div>
-            <div className="mt-1 font-mono text-[9.5px] text-white/35">Attention debt {debt}%</div>
+            <div className="mt-1 font-mono text-[9.5px] text-white/35">
+              Attention debt {debt}% · {hours}h window · due {timeLeft(Math.max(0, debtLeft)) || "now"}
+            </div>
           </div>
           <button onClick={onClose} className="shrink-0 text-[20px] leading-none text-white/40 hover:text-white">
             ×
@@ -143,6 +166,42 @@ export default function SlaveDrawer({
         <div className="thin-scroll flex-1 overflow-y-auto p-4">
           {tab === "control" && (
             <div className="space-y-3">
+              {/* tributes awaiting her verdict */}
+              {tributeOffers.map((o) => (
+                <div key={o.id} className="rounded-xl border border-amber-400/45 bg-amber-500/[0.07] p-3.5">
+                  <div className="flex items-center gap-2">
+                    <span className="label !text-amber-200/85">💰 Tribute offered</span>
+                    <span className="flex-1" />
+                    <span className="font-display text-[1.3rem] text-amber-200">{money(o.amount || 0)}</span>
+                  </div>
+                  <p className="mt-1 text-[11.5px] leading-relaxed text-white/55">
+                    Nothing is recorded until you accept. Releasing it declines and discards the offer.
+                  </p>
+                  <div className="mt-2.5 flex gap-2">
+                    <button
+                      onClick={() => {
+                        const r = judgeTribute(o.id, false);
+                        if (r.ok) beat("⛔ Tribute declined", "red");
+                        else if (r.error) beat(r.error, "red");
+                      }}
+                      className="flex-1 rounded-md border border-rose-400/40 bg-rose-500/10 py-2 text-[11.5px] text-rose-200 transition hover:bg-rose-500/20"
+                    >
+                      ❌ Reject
+                    </button>
+                    <button
+                      onClick={() => {
+                        const r = judgeTribute(o.id, true);
+                        if (r.ok) beat(`💰 Tribute accepted: ${money(o.amount || 0)} · on record`);
+                        else if (r.error) beat(r.error, "red");
+                      }}
+                      className="flex-1 rounded-md border border-emerald-400/40 bg-emerald-500/10 py-2 text-[11.5px] text-emerald-200 transition hover:bg-emerald-500/20"
+                    >
+                      ✅ Accept
+                    </button>
+                  </div>
+                </div>
+              ))}
+
               {/* permanent key */}
               <div
                 className={`rounded-xl border p-3.5 ${
@@ -211,6 +270,95 @@ export default function SlaveDrawer({
               </div>
 
               <DevotionControl slave={slave} onDone={(m) => beat(m)} />
+
+              {/* attention debt timer — individually overridable, default 12h */}
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3.5">
+                <div className="flex items-center gap-2">
+                  <span className="label">⏳ Attention debt timer</span>
+                  <span className="flex-1" />
+                  <span className="font-mono text-[10px] text-white/45">
+                    {hours}h · due {timeLeft(Math.max(0, debtLeft)) || "now"}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-white/45">
+                  If he is completely silent — no chat, ritual, tribute, proof or check-in — for the whole window,{" "}
+                  <span className="text-rose-200/80">10 devotion is removed automatically</span> and the timer starts
+                  over. Looking at the app does not count.
+                </p>
+
+                <div className="mt-3 grid grid-cols-4 gap-1.5">
+                  {[6, 12, 24, 48].map((h) => (
+                    <button
+                      key={h}
+                      onClick={() => {
+                        setAttentionHours(slave.id, h);
+                        setDraftHours(h);
+                        beat(`⏳ Attention timer set to ${h}h · ${slave.name}`);
+                      }}
+                      className={`rounded-md border py-2 text-[11px] transition ${
+                        hours === h
+                          ? "border-brass/60 bg-brass/15 text-brass-soft"
+                          : "border-white/10 text-white/55 hover:border-brass/40"
+                      }`}
+                    >
+                      {h}h
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={72}
+                    step={1}
+                    value={draftHours}
+                    onChange={(e) => setDraftHours(Number(e.target.value))}
+                    onPointerUp={() => {
+                      if (draftHours !== hours) {
+                        setAttentionHours(slave.id, draftHours);
+                        beat(`⏳ Attention timer set to ${draftHours}h · ${slave.name}`);
+                      }
+                    }}
+                    onKeyUp={() => {
+                      if (draftHours !== hours) {
+                        setAttentionHours(slave.id, draftHours);
+                        beat(`⏳ Attention timer set to ${draftHours}h · ${slave.name}`);
+                      }
+                    }}
+                    className="flex-1"
+                  />
+                  <span className="w-14 text-right font-mono text-[12px] text-brass-soft">{draftHours}h</span>
+                </div>
+
+                <div className="mt-2 flex items-center gap-2">
+                  {slave.attentionHours ? (
+                    <button
+                      onClick={() => {
+                        setAttentionHours(slave.id, null);
+                        setDraftHours(DEFAULT_ATTENTION_HOURS);
+                        beat(`⏳ Attention timer reset to default ${DEFAULT_ATTENTION_HOURS}h`);
+                      }}
+                      className="rounded-md border border-white/12 px-2.5 py-1 text-[10.5px] text-white/55 transition hover:border-brass/45 hover:text-brass-soft"
+                    >
+                      ↺ reset to default {DEFAULT_ATTENTION_HOURS}h
+                    </button>
+                  ) : (
+                    <span className="font-mono text-[9.5px] text-white/30">house default · {DEFAULT_ATTENTION_HOURS}h</span>
+                  )}
+                  <span className="flex-1" />
+                  <button
+                    onClick={() => {
+                      /* wind his timer back to now without changing the window — a fresh start */
+                      restartAttention(slave.id);
+                      beat(`⏳ Attention timer restarted · ${slave.name}`);
+                    }}
+                    className="rounded-md border border-white/12 px-2.5 py-1 text-[10.5px] text-white/55 transition hover:border-brass/45 hover:text-brass-soft"
+                  >
+                    ↻ restart now
+                  </button>
+                </div>
+              </div>
 
               {/* delivery reach — does an order actually arrive on his phone? */}
               <div
@@ -311,12 +459,29 @@ export default function SlaveDrawer({
                 </button>
               </div>
 
-              <button
-                onClick={onOpenChat}
-                className="w-full rounded-lg border border-white/12 py-3 text-[12.5px] text-white/70 transition hover:border-brass/45 hover:text-brass-soft"
-              >
-                💬 Open Conversation
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={onOpenChat}
+                  className="rounded-lg border border-white/12 py-3 text-[12.5px] text-white/70 transition hover:border-brass/45 hover:text-brass-soft"
+                >
+                  💬 Open Conversation
+                </button>
+                <button
+                  onClick={() => {
+                    if (
+                      !confirm(
+                        `Clear the entire chat history with ${slave.name}?\n\nEvery message, proof and reward in this conversation is permanently erased, including its stored files. His profile, devotion, strikes and ledger totals are kept.`
+                      )
+                    )
+                      return;
+                    clearChat(slave.id);
+                    beat(`🧹 Chat history cleared: ${slave.name}`, "red");
+                  }}
+                  className="rounded-lg border border-white/12 py-3 text-[12.5px] text-white/70 transition hover:border-rose-400/50 hover:text-rose-200"
+                >
+                  🧹 Clear History
+                </button>
+              </div>
 
               <button
                 onClick={() => {
