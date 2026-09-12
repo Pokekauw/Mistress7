@@ -135,13 +135,10 @@ export default function Gate({ go }: { go: (r: string) => void }) {
                 setErr("");
               }}
               onKeyDown={(e) => e.key === "Enter" && enterMistress()}
-              placeholder="••••"
+              placeholder="••••••••"
               className="mt-3 w-full rounded-lg border border-white/15 bg-black/40 px-4 py-3 text-center font-mono text-[1.6rem] tracking-[0.5em] text-brass-soft outline-none focus:border-brass/60"
             />
             <p className="mt-2 h-5 text-[12.5px] text-rose-300">{err}</p>
-            <p className="text-[11.5px] text-white/35">
-              Demo code: <span className="font-mono text-brass-soft/80">{MISTRESS_CODE}</span>
-            </p>
             <div className="mt-4 flex gap-2">
               <button onClick={() => setMode(null)} className="flex-1 rounded-lg border border-white/12 py-3 text-[13px] text-white/60">
                 Back
