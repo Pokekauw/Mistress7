@@ -663,31 +663,25 @@ export function fireCommand(cmd: CommandId, ids: string[], arg?: string | number
       result.ok += 1;
       const touch = (x: Slave): Slave => ({ ...x, lastTouched: Date.now() });
 
-      /* queue the phone alert for anything he must act on or feel */
+      /* ── PUSH POLICY ──
+       * Kun når Mistress trykker en handlingsknap: Decree, Check-in og Send Media
+       * ellers ingen push. Se telegram.ts PUSH_KINDS.
+       *
+       * 📜 Decree       → ✅ push med lyd
+       * 📍 Check-in     → ✅ push med lyd
+       * 👠 Send Media   → ✅ push med lyd (i sendMedia())
+       * ✍️ Chat, ⚖️ Verdict, ⏳ auto-straf, ⛓️ penance/tribute/gag/lock/strike/mercy → ❌ kun i appen
+       */
       const ALERT: Partial<Record<CommandId, AlertKind>> = {
-        gag: "gag",
-        lock: "lock",
-        penance: "penance",
-        tribute: "tribute",
         decree: "decree",
         locate: "checkin",
-        strike: "verdict",
-        mercy: "verdict",
       };
       const kind = ALERT[cmd];
       if (kind) {
         const body =
-          cmd === "penance" || cmd === "decree"
+          cmd === "decree"
             ? String(arg || "See your standing.")
-            : cmd === "tribute"
-              ? `${money(Number(arg) || 150)} is expected of you.`
-              : cmd === "locate"
-                ? `Confirm your location within ${fmtMins(Number(arg) || 15)}.`
-                : cmd === "gag" || cmd === "lock"
-                  ? `For ${fmtMins(Number(arg) || (cmd === "gag" ? 10 : 60))}.`
-                  : cmd === "mercy"
-                    ? "Every condition is lifted. Be grateful."
-                    : "Your record has been marked.";
+            : `Confirm your location within ${fmtMins(Number(arg) || 15)}.`;
         outbound.push({ id, kind, body });
       }
 
@@ -839,8 +833,10 @@ export function fireCommand(cmd: CommandId, ids: string[], arg?: string | number
   return result;
 }
 
-/** An ordinary chat message. Per the push policy it lives in the app
- *  only — it never buzzes his phone on Telegram. */
+/**
+ * ✍️ Almindelig chatbesked — ❌ Nej — ses kun i appen
+ * Per push policy: aldrig Telegram, kun i appen.
+ */
 export function sendMistressText(slaveId: string, text: string) {
   update((s) => mapSlave(pushMsg(s, { slaveId, from: "mistress", kind: "text", text }), slaveId, (x) => ({ ...x, lastTouched: Date.now() })));
 }
@@ -1371,15 +1367,19 @@ export const DELIVERY_LOOK: Record<Delivery, { icon: string; label: string }> = 
 /**
  * Deliver an alert if the plan allows it and the chat is linked.
  *
- * ⚖️  PUSH POLICY — only three things may buzz his phone:
- *    a decree, a check-in demand, or media she has sent him.
- * Anything else (chat messages, verdicts, penalties, gags, locks,
- * penance, tribute) returns "skipped" and never reaches Telegram.
+ * ⚖️  PUSH POLICY — kun 3 handlingsknapper må buzze hans telefon:
  *
- * Still fire-and-forget — a notification must never block or reverse a
- * command — but the outcome is now recorded rather than discarded. That
- * matters most for timed orders: a check-in carries an automatic penalty,
- * and she should not punish silence she never actually demanded out loud.
+ *  📜 Decree       → ✅ Ja, med lyd (push)
+ *  📍 Check-in     → ✅ Ja, med lyd (push)
+ *  👠 Send Media   → ✅ Ja, med lyd (push) — håndteres i sendMedia()
+ *  ✍️ Almindelig chatbesked                → ❌ Nej — ses kun i appen
+ *  ⚖️ Verdict (godkender/afviser proof)    → ❌ Nej — kun i appen
+ *  ⏳ Automatisk straf ved udeblevet check → ❌ Nej — kun i appen
+ *  ⛓️ Penance, tribute, gag, lock, strike, mercy m.m. → ❌ Nej — kun i appen
+ *
+ * Alt andet end decree/checkin/media returnerer "skipped" og når aldrig Telegram.
+ * Stadig fire-and-forget — en notifikation må aldrig blokere eller reversere en kommando —
+ * men resultatet logges, så Mistress ved om en timed order faktisk nåede frem.
  */
 export function notifySlave(slaveId: string, kind: AlertKind, body: string): Delivery {
   if (!isPushKind(kind)) return "skipped";
@@ -1407,10 +1407,24 @@ export function notifySlave(slaveId: string, kind: AlertKind, body: string): Del
   return "sent";
 }
 
-/** how an order reaches him right now, before it is even issued */
-export function deliveryFor(slaveId: string): Delivery {
+/** how an order reaches him right now, before it is even issued
+ *  Hvis kind angives og den ikke er push-worthy, returneres "skipped" — kun i appen.
+ */
+export function deliveryFor(slaveId: string, kind?: AlertKind): Delivery {
+  if (kind && !isPushKind(kind)) return "skipped";
   if (!has("telegram")) return "plan";
   return getSlave(slaveId)?.telegram?.chatId ? "sent" : "unlinked";
+}
+
+/** helper til at tjekke om en specifik command ville pushe */
+export function deliveryForCommand(slaveId: string, cmd: CommandId): Delivery {
+  const map: Partial<Record<CommandId, AlertKind>> = {
+    decree: "decree",
+    locate: "checkin",
+  };
+  const kind = map[cmd];
+  if (!kind) return "skipped";
+  return deliveryFor(slaveId, kind);
 }
 
 /* ============================ presentation 🖼️ ============================ */
@@ -1795,6 +1809,7 @@ export function sendMedia(
     );
   });
 
+  // 👠 Send Media — ✅ Ja, med lyd — kun denne + decree + checkin må pushe
   slaveIds.forEach((id) =>
     notifySlave(id, "media", media.lock === "free" ? caption || "She has given you something." : "Earn it, and you may look.")
   );
@@ -1938,7 +1953,7 @@ export function judgeProof(msgId: string, accept: boolean) {
     );
   });
 
-  /* a verdict is not push-worthy — he reads it in the app */
+  /* ⚖️ Verdict — ❌ Nej — kun i appen. Godkender/afviser proof trigger aldrig Telegram. */
 }
 
 /* ============================ location ============================ */
@@ -2048,7 +2063,7 @@ export function sweepLocationRequests() {
     return next;
   });
 
-  /* the penalty stands, but it is not push-worthy — he reads it in the app */
+  /* ⏳ Automatisk straf ved udeblevet check-in — ❌ Nej — kun i appen. Aldrig push. */
 }
 
 export function mapLinks(lat: number, lng: number) {

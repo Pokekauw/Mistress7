@@ -5,6 +5,14 @@
  *  function — the only thing holding the bot token — forwards it.
  *
  *  GET the same URL for a configuration report (no secrets).
+ *
+ *  PUSH POLICY (enforced in src/lib/telegram.ts + src/lib/store.ts):
+ *   📜 Decree       → ✅ Ja, med lyd (disable_notification = false)
+ *   📍 Check-in     → ✅ Ja, med lyd
+ *   👠 Send Media   → ✅ Ja, med lyd
+ *   ✍️ Chat, ⚖️ Verdict, ⏳ auto-straf, ⛓️ penance/tribute/gag/lock/strike/mercy → ❌ ingen push
+ *
+ *  Kun de tre handlingsknapper må nå hertil. Alt andet bliver i appen.
  * ==================================================================== */
 
 import { SERVER_ENV, configStatus } from "../_shared/env";
@@ -67,6 +75,7 @@ export default async function handler(req: Request): Promise<Response> {
     text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
+    // Kun decree, checkin, media når hertil — altid med lyd (silent = false → disable_notification = false)
     disable_notification: Boolean(silent),
   };
 

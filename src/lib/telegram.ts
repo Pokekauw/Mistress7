@@ -159,34 +159,54 @@ export async function sendTelegram(msg: TelegramMessage): Promise<boolean> {
 }
 
 /* ------------------------------------------------------------------ *
- *  message templates                                                  *
+ *  message templates & PUSH POLICY                                    *
  * ------------------------------------------------------------------ */
 
 export type AlertKind = "decree" | "penance" | "checkin" | "tribute" | "media" | "gag" | "lock" | "verdict";
 
 /**
- * The push policy, in one list.
+ * PUSH POLICY — single source of truth.
  *
- * The phone only buzzes for the three things that cannot wait:
- *   • a decree she has issued
- *   • a check-in she has demanded
- *   • media she has sent him
+ * Kun når Mistress trykker en handlingsknap: Decree, Check-in og Send Media
+ * ellers ingen push. Alt andet ses kun i appen.
  *
- * Everything else — ordinary chat messages, verdicts, penalties, gags,
- * locks, penance, tribute — stays inside the app and never wakes him.
+ *  Handling                                | Push?     | Lyd?
+ *  ----------------------------------------|-----------|----------
+ *  📜 Decree                               | ✅ Ja     | ✅ Med lyd
+ *  📍 Check-in                             | ✅ Ja     | ✅ Med lyd
+ *  👠 Send Media                           | ✅ Ja     | ✅ Med lyd
+ *  ✍️ Almindelig chatbesked                | ❌ Nej    | — ses kun i appen
+ *  ⚖️ Verdict (godkender/afviser proof)    | ❌ Nej    | — kun i appen
+ *  ⏳ Automatisk straf ved udeblevet check | ❌ Nej    | — kun i appen
+ *  ⛓️ Penance, tribute, gag, lock, strike, | ❌ Nej    | — kun i appen
+ *     mercy m.m.
+ *
+ * Dvs. telefonen buzzer KUN for de tre ting der ikke kan vente.
+ * Alt andet — chat, verdicts, penalties, gags, locks, penance,
+ * tribute — bliver i appen og vækker ham aldrig.
  */
-export const PUSH_KINDS: readonly AlertKind[] = ["decree", "checkin", "media"];
+export const PUSH_KINDS: readonly AlertKind[] = ["decree", "checkin", "media"] as const;
 
 export function isPushKind(kind: AlertKind): boolean {
-  return PUSH_KINDS.includes(kind);
+  return (PUSH_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * Kun de tre ovenstående må nå Telegram. Denne helper gør det eksplicit
+ * at et push kommer fra en handlingsknap.
+ */
+export function isActionButtonPush(kind: AlertKind): boolean {
+  return isPushKind(kind);
 }
 
 const TEMPLATES: Record<AlertKind, { title: string; cta: string }> = {
+  // ✅ PUSH — med lyd
   decree: { title: "📜 <b>A decree from your Mistress</b>", cta: "Read it" },
-  penance: { title: "⛓️ <b>Penance assigned</b>", cta: "Submit proof" },
   checkin: { title: "📍 <b>Location check-in demanded</b>", cta: "Confirm now" },
-  tribute: { title: "💰 <b>Tribute demanded</b>", cta: "Render tribute" },
   media: { title: "👠 <b>She has sent you something</b>", cta: "Look" },
+  // ❌ IKKE push-worthy — ses kun i appen, aldrig via Telegram
+  penance: { title: "⛓️ <b>Penance assigned</b>", cta: "Submit proof" },
+  tribute: { title: "💰 <b>Tribute demanded</b>", cta: "Render tribute" },
   gag: { title: "🤐 <b>You have been silenced</b>", cta: "See your standing" },
   lock: { title: "🔒 <b>You are held in chastity</b>", cta: "See your standing" },
   verdict: { title: "⚖️ <b>Judgement passed</b>", cta: "Read it" },
@@ -197,5 +217,7 @@ export function buildAlert(kind: AlertKind, body: string, houseName: string, app
   return {
     text: `${t.title}\n\n${escapeHtml(body)}\n\n<i>${escapeHtml(houseName)}</i>`,
     action: appUrl ? { label: t.cta, url: appUrl } : undefined,
+    // Push med lyd — kun for decree, checkin, media. disable_notification = false
+    silent: false,
   };
 }
