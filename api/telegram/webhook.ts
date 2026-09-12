@@ -128,8 +128,8 @@ async function claim(
   console.info(`[telegram] linked chat ${chatId} → houses/${houseId} code ${code}`);
   await reply(
     chatId,
-    "⛓️ <b>Linked.</b>\n\nYour Mistress can now reach you here. " +
-      "You will be told when a decree, penance or check-in is issued.\n\n" +
+    "⛓️ <b>Linked.</b>\n\nYour Mistress can now reach you here.\n" +
+      "The phone only sounds for what matters: a decree, a check-in demand, or something she has sent you.\n\n" +
       "<i>Return to the app — it confirms itself.</i>"
   );
   return json({ ok: true });
