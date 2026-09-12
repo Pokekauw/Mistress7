@@ -10,7 +10,7 @@ import {
   type Invite,
 } from "./invites";
 import { HOUSE_ID, isFirebase } from "../firebase";
-import { isUploadFail, uploadImage } from "./storage";
+import { deleteMedia, isUploadFail, uploadImage } from "./storage";
 import { canAddSlave, DEFAULT_PLAN, planHas, planOf, planRequiredFor, type Feature, type PlanId } from "./plans";
 import {
   buildAlert,
@@ -39,6 +39,16 @@ export type Slave = {
   ltv: number;
   joinedAt: number;
   lastTouched: number;
+  /**
+   * Last time the SUBMISSIVE himself did anything — chat, a ritual, tribute,
+   * proof, a location pin. Merely opening the app or looking at a reward does
+   * NOT count. Drives the attention-debt timer (see attentionDeadline).
+   */
+  lastActiveAt: number;
+  /** Individual attention-debt window in hours; absent = house default (12h) */
+  attentionHours?: number;
+  /** ritual id → timestamp of the last press that earned devotion (24h cooldown per button) */
+  lastRitualAt?: Record<string, number>;
   lastSeen: number;
   hardLimits: string[];
   spendCap: number;
@@ -124,6 +134,8 @@ export type Msg = {
   text: string;
   amount?: number;
   status?: "pending" | "paid" | "declined";
+  /** a tribute offer (kind === "tribute") offered against this demand message id */
+  demandId?: string;
   /** proof attachment — `url` is a Storage link, never raw file bytes */
   file?: { name: string; url: string | null; mime: string; size: number; path?: string | null };
   verdict?: "pending" | "accepted" | "rejected";
@@ -243,9 +255,35 @@ export function timeLeft(ms: number) {
 export const isGagged = (s: Slave) => s.gagUntil > Date.now();
 export const isLocked = (s: Slave) => s.lockUntil > Date.now();
 
+/* ===================== attention debt timer ⏳ ===================== */
+/** Default silence window before devotion is taken automatically */
+export const DEFAULT_ATTENTION_HOURS = 12;
+/** devotion removed every time an attention-debt window expires in silence */
+export const ATTENTION_PENALTY = 10;
+/** a ritual button earns its devotion at most once per rolling 24h */
+export const RITUAL_COOLDOWN_MS = 24 * 3600 * 1000;
+
+export const attentionWindowMs = (s: Slave) =>
+  (s.attentionHours && s.attentionHours > 0 ? s.attentionHours : DEFAULT_ATTENTION_HOURS) * 3600_000;
+
+/** the moment the timer is counting from — only the submissive's own activity moves it */
+export const attentionAnchor = (s: Slave) => s.lastActiveAt ?? s.lastTouched ?? s.joinedAt ?? Date.now();
+
+/** when the current attention-debt window comes due */
+export function attentionDeadline(s: Slave) {
+  return attentionAnchor(s) + attentionWindowMs(s);
+}
+
+/** 0–100 % of the current window already spent in silence */
 export function attentionDebt(s: Slave) {
-  const mins = (Date.now() - s.lastTouched) / 60000;
-  return Math.max(0, Math.min(100, Math.round((mins / 45) * 100)));
+  const elapsed = Date.now() - attentionAnchor(s);
+  return Math.max(0, Math.min(100, Math.round((elapsed / attentionWindowMs(s)) * 100)));
+}
+
+/** daily ritual cooldown: has this button earned its devotion today? */
+export function ritualState(s: Slave, ritualId: string) {
+  const resetsAt = (s.lastRitualAt?.[ritualId] || 0) + RITUAL_COOLDOWN_MS;
+  return { earned: resetsAt <= Date.now(), resetsAt };
 }
 
 export function money(n: number) {
@@ -273,6 +311,8 @@ function mkSlave(p: Partial<Slave> & { name: string }): Slave {
     ltv: 0,
     joinedAt: Date.now(),
     lastTouched: Date.now(),
+    lastActiveAt: Date.now(),
+    lastRitualAt: {},
     lastSeen: Date.now(),
     hardLimits: ["real-world exposure"],
     spendCap: 1500,
@@ -367,6 +407,9 @@ export function normaliseState(s: State): State {
         log: x.log || [],
         mistressId: x.mistressId || HOUSE_ID,
         invitedBy: x.invitedBy || "",
+        /* attention-debt timer: adopt the old lastTouched as its first anchor */
+        lastActiveAt: x.lastActiveAt ?? x.lastTouched ?? x.joinedAt ?? Date.now(),
+        lastRitualAt: x.lastRitualAt || {},
       };
     }),
   };
@@ -463,8 +506,12 @@ export function useTick(ms = 1000) {
   useEffect(() => {
     const t = setInterval(() => {
       sweepLocationRequests();
+      sweepAttentionDebt();
       set((n) => n + 1);
     }, ms);
+    /* run once on mount, too — a debt may already be due when the app opens */
+    sweepLocationRequests();
+    sweepAttentionDebt();
     return () => clearInterval(t);
   }, [ms]);
 }
@@ -511,6 +558,17 @@ function pushEvent(s: State, text: string, tone: "gold" | "red" | "green" | "mut
 function mapSlave(s: State, id: string, fn: (x: Slave) => Slave): State {
   return { ...s, slaves: s.slaves.map((x) => (x.id === id ? fn(x) : x)) };
 }
+
+/**
+ * Stamp genuine submissive activity — a message, a ritual, tribute, proof, a
+ * location pin. This is the ONLY thing that winds the attention-debt timer
+ * back. Opening the app, signing in or merely looking at a reward must not
+ * go through here.
+ */
+const touchActivity = (x: Slave): Slave => {
+  const now = Date.now();
+  return { ...x, lastActiveAt: now, lastTouched: now };
+};
 
 export function getSlave(id: string | null) {
   return state.slaves.find((s) => s.id === id) ?? null;
@@ -570,7 +628,7 @@ export const CHECKIN_WINDOWS = [
 export const PENANCE_PRESETS = [
   "Write two hundred lines: “I exist to serve.” 📝",
   "Kneel facing the corner for twenty minutes. ⛓️",
-  "Polish every pair of boots in this house. 💅",
+  "Polish every pair of boots in this house. 👢",
   "Take a cold shower, then photograph yourself. 🚿",
   "No screens for three hours. Report to me afterwards. 📵",
 ];
@@ -1132,7 +1190,7 @@ export function subSay(slaveId: string, text: string): { ok: boolean; error?: st
   if (!s) return { ok: false, error: "no session" };
   if (isGagged(s))
     return { ok: false, error: `🤐 You are gagged. ${timeLeft(s.gagUntil - Date.now())} remaining. Do not test her.` };
-  update((st) => pushMsg(st, { slaveId, from: "sub", kind: "text", text }));
+  update((st) => mapSlave(pushMsg(st, { slaveId, from: "sub", kind: "text", text }), slaveId, touchActivity));
   return { ok: true };
 }
 
@@ -1141,25 +1199,57 @@ export const RITUALS = [
   { id: "kneel", label: "Kneel & Wait", icon: "🧎", title: "Kneeling", line: "kneels in silence, eyes lowered, awaiting instruction.", dev: 2 },
   { id: "beg", label: "Beg", icon: "🙏", title: "Begging", line: "begs for his Mistress's attention.", dev: 3 },
   { id: "confess", label: "Confess", icon: "📿", title: "Confession", line: "confesses what he craves and cannot admit aloud.", dev: 3 },
-  { id: "serve", label: "Boot Service", icon: "💅", title: "Boot Service", line: "polishes his Mistress's boots with reverence.", dev: 5 },
+  { id: "serve", label: "Boot Service", icon: "👢", title: "Boot Service", line: "polishes his Mistress's boots with reverence.", dev: 5 },
 ];
 
-export function subRitual(slaveId: string, id: string) {
+export type RitualResult = { earned: boolean; dev: number; resetsAt: number };
+
+/**
+ * A ritual may be performed as often as he likes (it is always activity that
+ * winds the attention timer back), but each button earns its devotion at most
+ * once per rolling 24 hours — he cannot button-mash his way to ♥100.
+ */
+export function subRitual(slaveId: string, id: string): RitualResult | null {
   const r = RITUALS.find((x) => x.id === id);
-  if (!r) return;
+  if (!r) return null;
+  let result: RitualResult = { earned: false, dev: 0, resetsAt: 0 };
   update((s) => {
-    let next = mapSlave(s, slaveId, (x) => ({
-      ...x,
-      devotion: Math.min(100, x.devotion + r.dev),
-      worships: x.worships + 1,
-      history: [...x.history.slice(-6), Math.min(100, x.devotion + r.dev)],
-    }));
+    let next = mapSlave(s, slaveId, (x) => {
+      const last = x.lastRitualAt?.[id] || 0;
+      const now = Date.now();
+      const earns = now - last >= RITUAL_COOLDOWN_MS;
+      const nextDev = earns ? Math.min(100, x.devotion + r.dev) : x.devotion;
+      result = {
+        earned: earns,
+        dev: r.dev,
+        resetsAt: (earns ? now : last) + RITUAL_COOLDOWN_MS,
+      };
+      return {
+        ...touchActivity(x),
+        devotion: nextDev,
+        worships: x.worships + 1,
+        history: earns ? [...x.history.slice(-6), nextDev] : x.history,
+        lastRitualAt: { ...(x.lastRitualAt || {}), ...(earns ? { [id]: now } : {}) },
+      };
+    });
     const who = next.slaves.find((x) => x.id === slaveId)!;
-    next = pushMsg(next, { slaveId, from: "sub", kind: "decree", title: r.title, text: `${who.name} ${r.line}` });
-    return pushEvent(next, `${r.icon} ${who.name} — ${r.title} · devotion +${r.dev}`, "green");
+    if (result.earned) {
+      /* the ritual — and its chat line — is only written when it actually counts
+         for devotion; cooldown presses still wind the activity timer back,
+         without spamming her thread with repeated kneeling lines */
+      next = pushMsg(next, { slaveId, from: "sub", kind: "decree", title: r.title, text: `${who.name} ${r.line}` });
+      next = pushEvent(next, `${r.icon} ${who.name} — ${r.title} · devotion +${r.dev}`, "green");
+    }
+    return next;
   });
+  return result;
 }
 
+/**
+ * A submissive OFFERS tribute. Nothing touches his ledger, spend, devotion or
+ * the outstanding demand until the Mistress accepts it (see judgeTribute).
+ * Rejecting simply discards the offer.
+ */
 export function payTribute(slaveId: string, amount: number, demandId?: string): { ok: boolean; error?: string } {
   const s = getSlave(slaveId);
   if (!s) return { ok: false, error: "no session" };
@@ -1168,23 +1258,95 @@ export function payTribute(slaveId: string, amount: number, demandId?: string): 
     return { ok: false, error: `Blocked by your own spend cap (${money(s.spendCap)}/mo). Raising it takes 24h.` };
 
   update((st) => {
-    let next = mapSlave(st, slaveId, (x) => ({
-      ...x,
-      ltv: x.ltv + amount,
-      spentThisMonth: x.spentThisMonth + amount,
-      devotion: Math.min(100, x.devotion + Math.round(amount / 40)),
-    }));
-    if (demandId) next = { ...next, messages: next.messages.map((m) => (m.id === demandId ? { ...m, status: "paid" as const } : m)) };
-    next = pushMsg(next, { slaveId, from: "sub", kind: "tribute", title: "Tribute Paid", text: "Tribute rendered.", amount });
+    let next = mapSlave(st, slaveId, touchActivity);
+    next = pushMsg(next, {
+      slaveId,
+      from: "sub",
+      kind: "tribute",
+      title: "Tribute Offered",
+      text: "Tribute offered — awaiting her judgement.",
+      amount,
+      verdict: "pending",
+      demandId,
+    });
     const sl = next.slaves.find((x) => x.id === slaveId)!;
-    return pushEvent(next, `💰 Tribute Received: ${sl.name} · ${money(amount)} · ledger ${money(sl.ltv)}`, "gold");
+    return pushEvent(next, `💰 Tribute Offered: ${sl.name} · ${money(amount)} · awaiting acceptance`, "gold");
   });
+  return { ok: true };
+}
+
+/** Mistress accepts or rejects a tribute offered by a submissive. */
+export function judgeTribute(msgId: string, accept: boolean): { ok: boolean; error?: string } {
+  const m = state.messages.find((x) => x.id === msgId);
+  if (!m || m.kind !== "tribute" || m.verdict !== "pending") return { ok: false, error: "Nothing pending." };
+  const slave = getSlave(m.slaveId);
+  if (!slave) return { ok: false, error: "no session" };
+  const amount = m.amount || 0;
+
+  /* a safeword between offer and verdict freezes tribute money */
+  if (accept && slave.tributeFrozenUntil > Date.now())
+    return { ok: false, error: "Tribute is frozen following a safeword — decline the offer instead." };
+  if (accept && slave.spentThisMonth + amount > slave.spendCap)
+    return { ok: false, error: `Over his monthly spend cap (${money(slave.spendCap)}) — decline the offer.` };
+
+  update((s) => {
+    let next: State = {
+      ...s,
+      messages: s.messages.map((x) =>
+        x.id === msgId
+          ? {
+              ...x,
+              verdict: accept ? ("accepted" as const) : ("rejected" as const),
+              title: accept ? "Tribute Paid" : "Tribute Declined",
+              text: accept ? "Tribute rendered and recorded." : "Tribute declined; nothing was recorded.",
+            }
+          : x
+      ),
+    };
+
+    if (accept) {
+      next = mapSlave(next, m.slaveId, (x) => {
+        const after = Math.min(100, x.devotion + Math.round(amount / 40));
+        return {
+          ...x,
+          ltv: x.ltv + amount,
+          spentThisMonth: x.spentThisMonth + amount,
+          devotion: after,
+          history: [...(x.history || []).slice(-6), after],
+        };
+      });
+      /* the demand this offer answers is settled only on acceptance */
+      if (m.demandId)
+        next = { ...next, messages: next.messages.map((x) => (x.id === m.demandId ? { ...x, status: "paid" as const } : x)) };
+      next = pushMsg(next, {
+        slaveId: m.slaveId,
+        from: "system",
+        kind: "system",
+        text: `💰 Your Mistress accepted your tribute of ${money(amount)}. It is on your record. 🖤`,
+      });
+      const sl = next.slaves.find((x) => x.id === m.slaveId)!;
+      next = pushEvent(next, `💰 Tribute Accepted: ${sl.name} · ${money(amount)} · ledger ${money(sl.ltv)}`, "gold");
+    } else {
+      next = pushMsg(next, {
+        slaveId: m.slaveId,
+        from: "system",
+        kind: "system",
+        text: `💰 Your tribute of ${money(amount)} was declined. It was not recorded.`,
+      });
+      const sl = next.slaves.find((x) => x.id === m.slaveId)!;
+      next = pushEvent(next, `⛔ Tribute Declined: ${sl.name} · ${money(amount)}`, "red");
+    }
+    return next;
+  });
+
+  /* ⚖️ Verdict på tribute — som proof: kun i appen, aldrig Telegram-push. */
   return { ok: true };
 }
 
 export function declineDemand(slaveId: string, demandId: string) {
   update((s) => {
-    const next = { ...s, messages: s.messages.map((m) => (m.id === demandId ? { ...m, status: "declined" as const } : m)) };
+    let next = mapSlave(s, slaveId, touchActivity);
+    next = { ...next, messages: next.messages.map((m) => (m.id === demandId ? { ...m, status: "declined" as const } : m)) };
     const sl = next.slaves.find((x) => x.id === slaveId)!;
     return pushEvent(
       pushMsg(next, { slaveId, from: "system", kind: "system", text: "💰 A tribute demand was declined. Your Mistress has been informed." }),
@@ -1253,7 +1415,11 @@ export function saveDungeon(d: Partial<Dungeon>) {
 
 export function completePenance(slaveId: string) {
   update((s) => {
-    let next = mapSlave(s, slaveId, (x) => ({ ...x, penance: null, devotion: Math.min(100, x.devotion + 5) }));
+    let next = mapSlave(s, slaveId, (x) => ({
+      ...touchActivity(x),
+      penance: null,
+      devotion: Math.min(100, x.devotion + 5),
+    }));
     const who = next.slaves.find((x) => x.id === slaveId)!;
     next = pushMsg(next, {
       slaveId,
@@ -1839,7 +2005,7 @@ export function unlockMedia(msgId: string, slaveId: string): { ok: boolean; erro
 
     update((s) => {
       let next = mapSlave(s, slaveId, (x) => ({
-        ...x,
+        ...touchActivity(x),
         ltv: x.ltv + price,
         spentThisMonth: x.spentThisMonth + price,
         devotion: Math.min(100, x.devotion + Math.round(price / 40)),
@@ -1851,6 +2017,8 @@ export function unlockMedia(msgId: string, slaveId: string): { ok: boolean; erro
         title: "Tribute Paid",
         text: "Paid to unlock a reward.",
         amount: price,
+        /* pay-to-unlock is an instant vending exchange, not an offered tribute */
+        verdict: "accepted",
       });
       next = {
         ...next,
@@ -1863,10 +2031,12 @@ export function unlockMedia(msgId: string, slaveId: string): { ok: boolean; erro
   }
 
   update((s) => {
-    const next: State = {
+    let next: State = {
       ...s,
       messages: s.messages.map((m) => (m.id === msgId ? { ...m, media: { ...m.media!, unlocked: true } } : m)),
     };
+    /* choosing to open a reward is activity; merely looking at it (viewMedia) is not */
+    next = mapSlave(next, slaveId, touchActivity);
     const sl = next.slaves.find((x) => x.id === slaveId)!;
     return pushEvent(next, `👠 Reward Opened: ${sl.name}`, "green");
   });
@@ -1900,15 +2070,19 @@ export function submitProof(
   note: string
 ) {
   update((s) => {
-    const next = pushMsg(s, {
+    const next = mapSlave(
+      pushMsg(s, {
+        slaveId,
+        from: "sub",
+        kind: "proof",
+        title: "Proof Submitted",
+        text: note || "Proof of compliance submitted for judgement.",
+        file,
+        verdict: "pending",
+      }),
       slaveId,
-      from: "sub",
-      kind: "proof",
-      title: "Proof Submitted",
-      text: note || "Proof of compliance submitted for judgement.",
-      file,
-      verdict: "pending",
-    });
+      touchActivity
+    );
     const sl = next.slaves.find((x) => x.id === slaveId)!;
     return pushEvent(next, `📸 Proof Submitted: ${sl.name} — awaiting judgement`, "muted");
   });
@@ -1990,9 +2164,8 @@ export function shareLocation(slaveId: string, fix: Fix) {
     });
 
     next = mapSlave(next, slaveId, (x) => ({
-      ...x,
+      ...touchActivity(x),
       lastFix: fix,
-      lastTouched: Date.now(),
       devotion: Math.min(100, x.devotion + (late ? 0 : 3)),
     }));
 
@@ -2064,6 +2237,140 @@ export function sweepLocationRequests() {
   });
 
   /* ⏳ Automatisk straf ved udeblevet check-in — ❌ Nej — kun i appen. Aldrig push. */
+}
+
+/**
+ * ⏳ Attention-debt sweep — runs on every tick.
+ *
+ * Each submissive carries an activity window (default 12 hours, individually
+ * overridable per slave). If he has done NOTHING — no chat, ritual, tribute,
+ * proof, location, reward unlock — when the window closes, 10 devotion is
+ * removed automatically and the timer starts over. Merely opening the app or
+ * looking around does not save him.
+ *
+ * If several whole windows elapsed while nobody had the house open, every
+ * complete window is accounted for in one combined penalty on return.
+ */
+export function sweepAttentionDebt() {
+  const now = Date.now();
+  const due = state.slaves.filter((x) => now - attentionAnchor(x) >= attentionWindowMs(x));
+  if (!due.length) return;
+
+  update((s) => {
+    let next = s;
+    due.forEach((before) => {
+      const id = before.id;
+      const win = attentionWindowMs(before);
+      const hours = Math.round(win / 3600_000);
+      const cycles = Math.max(1, Math.floor((now - attentionAnchor(before)) / win));
+      const loss = Math.min(before.devotion, ATTENTION_PENALTY * cycles);
+      const after = Math.max(0, before.devotion - loss);
+      /* timer starts over from the last expiry — the current partial window is preserved */
+      const anchor = attentionAnchor(before) + cycles * win;
+
+      next = mapSlave(next, id, (x) =>
+        addLog(
+          {
+            ...x,
+            lastActiveAt: anchor,
+            devotion: after,
+            history: [...(x.history || []).slice(-6), after],
+          },
+          {
+            icon: "⏳",
+            label: "Attention Debt Due",
+            detail:
+              cycles > 1
+                ? `Silent through ${cycles} debt cycles · −${loss} devotion · timer restarted`
+                : `No activity for ${hours} hour${hours === 1 ? "" : "s"} · −${ATTENTION_PENALTY} devotion · timer restarted`,
+            devotion: -loss,
+            kind: "condition",
+          }
+        )
+      );
+
+      next = pushMsg(next, {
+        slaveId: id,
+        from: "system",
+        kind: "system",
+        text:
+          cycles > 1
+            ? `⏳ You were silent long enough for ${cycles} attention debts to come due. ${loss} devotion has been taken from you. The ${hours}-hour timer begins again.`
+            : `⏳ Your ${hours}-hour attention debt came due in silence. ${ATTENTION_PENALTY} devotion has been taken from you. The timer begins again.`,
+      });
+
+      const sl = next.slaves.find((x) => x.id === id);
+      if (sl)
+        next = pushEvent(
+          next,
+          `⏳ Attention Debt: ${sl.name} · ${cycles > 1 ? `${cycles} cycles · ` : ""}−${loss} devotion`,
+          "red"
+        );
+    });
+    return next;
+  });
+
+  /* ⏳ Automatisk attention-straf — kun i appen, aldrig Telegram-push. */
+}
+
+/* ============================ chat housekeeping 🧹 ============================ */
+
+/**
+ * Permanently erase the entire one-to-one conversation with a submissive.
+ * His profile, devotion, ledger and discipline record are kept; every message
+ * — including stored proof and reward files — is destroyed.
+ */
+export function clearChat(slaveId: string) {
+  /* best-effort: delete backing Storage objects before the messages vanish */
+  state.messages
+    .filter((m) => m.slaveId === slaveId)
+    .forEach((m) => {
+      void deleteMedia(m.file?.path ?? null);
+      void deleteMedia(m.media?.path ?? null);
+    });
+
+  update((s) => {
+    let next: State = { ...s, messages: s.messages.filter((m) => m.slaveId !== slaveId) };
+    next = pushMsg(next, {
+      slaveId,
+      from: "system",
+      kind: "system",
+      text: "🧹 Your Mistress cleared this conversation's history.",
+    });
+    const sl = s.slaves.find((x) => x.id === slaveId);
+    return pushEvent(next, `🧹 Chat history cleared: ${sl?.name ?? "a submissive"}`, "muted");
+  });
+}
+
+/* ============================ attention timer (Mistress) ⏳ ============================ */
+
+/**
+ * Individually set a submissive's attention-debt window. Setting a new window
+ * starts his timer over from now; pass null to restore the 12h default.
+ */
+export function setAttentionHours(slaveId: string, hours: number | null) {
+  const h = hours == null ? undefined : Math.min(168, Math.max(1, Math.round(hours)));
+  update((s) => {
+    let next = mapSlave(s, slaveId, (x) => ({ ...x, attentionHours: h, lastActiveAt: Date.now() }));
+    const sl = next.slaves.find((x) => x.id === slaveId);
+    if (!sl) return next;
+    return pushEvent(
+      next,
+      h
+        ? `⏳ Attention timer set to ${h}h: ${sl.name} · timer restarted`
+        : `⏳ Attention timer reset to default ${DEFAULT_ATTENTION_HOURS}h: ${sl.name}`,
+      "muted"
+    );
+  });
+}
+
+/** wind a submissive's attention-debt timer back to a full window, right now */
+export function restartAttention(slaveId: string) {
+  update((s) => {
+    let next = mapSlave(s, slaveId, (x) => ({ ...x, lastActiveAt: Date.now() }));
+    const sl = next.slaves.find((x) => x.id === slaveId);
+    return sl ? pushEvent(next, `⏳ Attention timer restarted: ${sl.name}`, "muted") : next;
+  });
 }
 
 export function mapLinks(lat: number, lng: number) {

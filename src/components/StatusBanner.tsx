@@ -1,4 +1,5 @@
 import {
+  attentionDeadline,
   isGagged,
   isLocked,
   rankOf,
@@ -28,6 +29,10 @@ export default function StatusBanner({
   const lock = isLocked(slave);
   const now = Date.now();
 
+  /* ⏳ his attention-debt window — chat or act, or devotion is taken automatically */
+  const debtLeft = attentionDeadline(slave) - now;
+  const debtHours = slave.attentionHours && slave.attentionHours > 0 ? slave.attentionHours : 12;
+
   type Item = {
     icon: string;
     label: string;
@@ -38,6 +43,18 @@ export default function StatusBanner({
   };
 
   const items: Item[] = [];
+
+  /* always visible — the silence timer never stops */
+  items.push({
+    icon: "⏳",
+    label: `Attention debt · ${debtHours}h window`,
+    value:
+      debtLeft > 0
+        ? `${timeLeft(debtLeft)} until silence costs 10 devotion — chat or serve`
+        : "Overdue — devotion is being taken",
+    tone: debtLeft < 3600_000 ? "rose" : debtLeft < 3 * 3600_000 ? "amber" : "brass",
+    urgent: debtLeft < 3600_000,
+  });
 
   if (openCheckIn)
     items.push({

@@ -205,6 +205,10 @@ export async function mirrorCollections(s: State) {
           strikes: x.strikes,
           worships: x.worships,
           ltv: x.ltv,
+          /* attention-debt timer */
+          lastActiveAt: x.lastActiveAt ?? x.lastTouched ?? null,
+          attentionHours: x.attentionHours ?? null,
+          lastRitualAt: x.lastRitualAt ?? null,
           gagUntil: x.gagUntil || null,
           lockUntil: x.lockUntil || null,
           penance: x.penance,
@@ -240,7 +244,12 @@ export async function mirrorCollections(s: State) {
 
     /* messages: new ones, plus anything whose status can still change */
     s.messages.forEach((m: Msg) => {
-      const mutable = m.kind === "locreq" || m.kind === "proof" || m.kind === "demand" || m.kind === "media";
+      const mutable =
+        m.kind === "locreq" ||
+        m.kind === "proof" ||
+        m.kind === "demand" ||
+        m.kind === "media" ||
+        m.kind === "tribute";
       if (mirrored.msgs.has(m.id) && !mutable) return;
       mirrored.msgs.add(m.id);
 

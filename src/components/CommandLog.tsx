@@ -51,7 +51,19 @@ function toEntry(m: Msg): Entry | null {
         outcome: m.status === "paid" ? "met" : m.status === "declined" ? "failed" : "pending",
       };
     case "tribute":
-      return { ...base, icon: "💰", title: "Tribute rendered", detail: money(m.amount || 0), outcome: "met" };
+      return {
+        ...base,
+        icon: "💰",
+        title:
+          m.verdict === "pending"
+            ? "Tribute offered"
+            : m.verdict === "rejected"
+              ? "Tribute declined"
+              : "Tribute rendered",
+        detail: money(m.amount || 0),
+        /* legacy tributes carry no verdict and were paid immediately */
+        outcome: m.verdict === "pending" ? "pending" : m.verdict === "rejected" ? "failed" : "met",
+      };
     case "proof":
       return {
         ...base,

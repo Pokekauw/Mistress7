@@ -17,11 +17,14 @@ import PunishmentWheel from "../components/PunishmentWheel";
 import {
   ACCESS_LOOK,
   attentionDebt,
+  attentionDeadline,
   avatarFor,
   bgStyle,
   chatBgFor,
+  clearChat,
   DEFAULT_BG,
   has,
+  judgeTribute,
   setHouseAvatars,
   setHouseChatBg,
   setTelegramBot,
@@ -52,6 +55,7 @@ import {
   useStore,
   useTick,
   type CommandId,
+  type Msg,
   type Slave,
   type Tier,
 } from "../lib/store";
@@ -121,7 +125,9 @@ function SlaveCard({ s, on, onClick, avatar }: { s: Slave; on: boolean; onClick:
 
       <div className="mt-2">
         <div className="flex items-center justify-between">
-          <span className="label !text-[8.5px]">attention debt</span>
+          <span className="label !text-[8.5px]">
+            attention debt · due {timeLeft(Math.max(0, attentionDeadline(s) - Date.now())) || "now"}
+          </span>
           <span className="flex gap-1 font-mono text-[9.5px] text-brass/85">
             {s.telegram && <span title="Telegram linked">🔔</span>}
             {isGagged(s) && <span>◌ {timeLeft(s.gagUntil - Date.now())}</span>}
@@ -151,6 +157,15 @@ function Thread({ slave }: { slave: Slave }) {
   const [text, setText] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
+
+  /* demands that currently have a tribute offer waiting on her verdict */
+  const offerByDemand = useMemo(() => {
+    const map = new Map<string, Msg>();
+    all.forEach((m) => {
+      if (m.kind === "tribute" && m.verdict === "pending" && m.demandId) map.set(m.demandId, m);
+    });
+    return map;
+  }, [all]);
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
@@ -205,22 +220,71 @@ function Thread({ slave }: { slave: Slave }) {
                 </div>
               </div>
             );
-          if (m.kind === "tribute")
+          if (m.kind === "tribute") {
+            const offered = m.verdict === "pending";
+            const rejected = m.verdict === "rejected";
             return (
-              <div key={m.id} className="rounded-lg border border-brass/40 bg-brass/12 px-3 py-2.5 text-center">
-                <div className="label">💰 Tribute Received</div>
-                <div className="font-display text-[1.4rem] gold-text">{money(m.amount || 0)}</div>
+              <div
+                key={m.id}
+                className={`rounded-lg border px-3 py-2.5 text-center ${
+                  offered
+                    ? "border-amber-400/50 bg-amber-500/10"
+                    : rejected
+                      ? "border-rose-400/40 bg-rose-500/8"
+                      : "border-brass/40 bg-brass/12"
+                }`}
+              >
+                <div className="label">
+                  {offered ? "💰 Tribute offered — awaiting your verdict" : rejected ? "💰 Tribute declined" : "💰 Tribute Received"}
+                </div>
+                <div
+                  className={`font-display text-[1.4rem] ${offered ? "text-amber-200" : rejected ? "text-rose-200/80" : "gold-text"}`}
+                >
+                  {money(m.amount || 0)}
+                </div>
+                {offered && (
+                  <div className="mx-auto mt-2 flex max-w-xs gap-2">
+                    <button
+                      onClick={() => {
+                        const r = judgeTribute(m.id, false);
+                        if (!r.ok && r.error) alert(r.error);
+                      }}
+                      className="flex-1 rounded-md border border-rose-400/40 bg-rose-500/10 py-1.5 text-[11.5px] text-rose-200 transition hover:bg-rose-500/20"
+                    >
+                      ❌ Reject
+                    </button>
+                    <button
+                      onClick={() => {
+                        const r = judgeTribute(m.id, true);
+                        if (!r.ok && r.error) alert(r.error);
+                      }}
+                      className="flex-1 rounded-md border border-emerald-400/40 bg-emerald-500/10 py-1.5 text-[11.5px] text-emerald-200 transition hover:bg-emerald-500/20"
+                    >
+                      ✅ Accept
+                    </button>
+                  </div>
+                )}
+                {rejected && <div className="mt-0.5 text-[10.5px] text-rose-100/60">not on record</div>}
               </div>
             );
-          if (m.kind === "demand")
+          }
+          if (m.kind === "demand") {
+            const pendingOffer = offerByDemand.get(m.id);
             return (
               <div key={m.id} className="rounded-lg border border-white/12 bg-white/[0.03] px-3 py-2 text-center text-[12px] text-white/60">
                 💰 Tribute Demanded: {money(m.amount || 0)} —{" "}
                 <span className={m.status === "paid" ? "text-emerald-300" : m.status === "declined" ? "text-rose-300" : "text-amber-300"}>
-                  {m.status === "paid" ? "paid" : m.status === "declined" ? "declined" : "awaiting payment"}
+                  {m.status === "paid"
+                    ? "paid"
+                    : m.status === "declined"
+                      ? "declined"
+                      : pendingOffer
+                        ? "tribute offered · accept it below ⬇"
+                        : "awaiting payment"}
                 </span>
               </div>
             );
+          }
           if (m.kind === "locreq") {
             const late = m.locState === "pending" && (m.deadline || 0) < Date.now();
             return (
@@ -741,7 +805,8 @@ function LedgerTab() {
   const msgs = useStore((s) => s.messages);
   const dungeon = useStore((s) => s.dungeon);
 
-  const tributes = msgs.filter((m) => m.kind === "tribute");
+  /* only tributes she accepted are on the record; legacy tributes carry no verdict */
+  const tributes = msgs.filter((m) => m.kind === "tribute" && (!m.verdict || m.verdict === "accepted"));
   const gmv = tributes.reduce((a, m) => a + (m.amount || 0), 0);
   const subs = slaves.reduce((a, s) => a + dungeon.prices[s.tier], 0);
 
@@ -1037,6 +1102,18 @@ export default function Deck({ go }: { go: (r: string) => void }) {
         if (s) q.push({ text: `📸 Proof Awaiting Judgement: ${s.name}`, tone: "gold", meta: "Open to accept or reject", id: s.id });
       });
     allMessages
+      .filter((m) => m.kind === "tribute" && m.verdict === "pending")
+      .forEach((m) => {
+        const s = slaves.find((x) => x.id === m.slaveId);
+        if (s)
+          q.push({
+            text: `💰 Tribute Awaiting Acceptance: ${s.name}`,
+            tone: "gold",
+            meta: `${money(m.amount || 0)} offered · open his profile to accept or reject`,
+            id: s.id,
+          });
+      });
+    allMessages
       .filter((m) => m.kind === "locreq" && m.locState === "pending")
       .forEach((m) => {
         const s = slaves.find((x) => x.id === m.slaveId);
@@ -1250,6 +1327,22 @@ export default function Deck({ go }: { go: (r: string) => void }) {
                       {isGagged(open) && <span className="font-mono text-[10.5px] text-amber-300">◌ gagged {timeLeft(open.gagUntil - Date.now())}</span>}
                       {isLocked(open) && <span className="font-mono text-[10.5px] text-violet-300">⌾ locked {timeLeft(open.lockUntil - Date.now())}</span>}
                       <span className="flex-1" />
+                      <button
+                        onClick={() => {
+                          if (
+                            !confirm(
+                              `Clear the entire chat history with ${open.name}?\n\nEvery message, proof and reward in this conversation is permanently erased, including its stored files. His profile, devotion, strikes and ledger totals are kept.`
+                            )
+                          )
+                            return;
+                          clearChat(open.id);
+                          flash(`🧹 Chat history cleared: ${open.name}`);
+                        }}
+                        title="Clear chat history"
+                        className="rounded-full border border-white/15 px-2.5 py-1 text-[11px] text-white/55 transition hover:border-rose-400/50 hover:text-rose-200"
+                      >
+                        🧹 Clear history
+                      </button>
                       <button onClick={() => setOpenId(null)} className="text-white/35 hover:text-white">
                         ×
                       </button>

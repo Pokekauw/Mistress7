@@ -27,6 +27,7 @@ import {
   payTribute,
   rankOf,
   RITUALS,
+  ritualState,
   safeword,
   setSession,
   setSpendCap,
@@ -49,6 +50,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   );
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
   const [sheet, setSheet] = useState<null | "tribute" | "limits" | "proof" | "key" | "telegram">(null);
   const [amt, setAmt] = useState(150);
   const [proofFile, setProofFile] = useState<{
@@ -134,7 +136,11 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
 
   const gagged = isGagged(slave);
   const locked = isLocked(slave);
-  const pending = msgs.filter((m) => m.kind === "demand" && m.status === "pending");
+  /* tributes he has offered that she has not judged yet */
+  const pendingOffers = msgs.filter((m) => m.kind === "tribute" && m.verdict === "pending");
+  const offeredDemandIds = new Set(pendingOffers.map((m) => m.demandId).filter(Boolean) as string[]);
+  /* a demand with an offer in flight is not shown as still owed */
+  const pending = msgs.filter((m) => m.kind === "demand" && m.status === "pending" && !offeredDemandIds.has(m.id));
   const pendingProof = msgs.some((m) => m.kind === "proof" && m.verdict === "pending");
 
   const send = () => {
@@ -346,6 +352,16 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
           </div>
         ))}
 
+        {/* tributes offered, awaiting her accept / reject */}
+        {pendingOffers.map((o) => (
+          <div key={o.id} className="mt-2 rounded-lg border border-amber-400/45 bg-amber-500/10 px-4 py-3 text-center">
+            <div className="label !text-amber-200/85">💰 Tribute offered · {money(o.amount || 0)}</div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-amber-100/75">
+              Awaiting her acceptance. Nothing is recorded until she approves it. ⏳
+            </div>
+          </div>
+        ))}
+
         {/* thread */}
         <div
           className="thin-scroll mt-3 flex-1 space-y-2.5 overflow-y-auto rounded-xl border border-white/8 p-3"
@@ -384,13 +400,33 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                   </div>
                 </div>
               );
-            if (m.kind === "tribute")
+            if (m.kind === "tribute") {
+              const offered = m.verdict === "pending";
+              const rejected = m.verdict === "rejected";
               return (
-                <div key={m.id} className="rounded-lg border border-brass/35 bg-brass/10 px-3 py-2 text-center">
-                  <div className="label">Recorded</div>
-                  <div className="font-display text-[1.2rem] text-brass-soft">{money(m.amount || 0)}</div>
+                <div
+                  key={m.id}
+                  className={`rounded-lg border px-3 py-2 text-center ${
+                    offered
+                      ? "border-amber-400/45 bg-amber-500/10"
+                      : rejected
+                        ? "border-rose-400/40 bg-rose-500/8"
+                        : "border-brass/35 bg-brass/10"
+                  }`}
+                >
+                  <div className="label">{offered ? "Tribute offered" : rejected ? "Tribute declined" : "Recorded"}</div>
+                  <div
+                    className={`font-display text-[1.2rem] ${
+                      offered ? "text-amber-200" : rejected ? "text-rose-200/80" : "text-brass-soft"
+                    }`}
+                  >
+                    {money(m.amount || 0)}
+                  </div>
+                  {offered && <div className="mt-0.5 text-[10.5px] text-amber-100/70">awaiting her judgement ⏳</div>}
+                  {rejected && <div className="mt-0.5 text-[10.5px] text-rose-100/65">not recorded</div>}
                 </div>
               );
+            }
             if (m.kind === "demand")
               return (
                 <div key={m.id} className="text-center text-[11.5px] text-white/40">
@@ -480,6 +516,9 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
         </div>
 
         {err && <div className="mt-2 rounded-lg border border-rose-400/35 bg-rose-950/40 px-4 py-2.5 text-[12.5px] text-rose-100">{err}</div>}
+        {note && !err && (
+          <div className="mt-2 rounded-lg border border-brass/35 bg-brass/10 px-4 py-2.5 text-[12.5px] text-brass-soft">{note}</div>
+        )}
 
         {/* telegram — inline in the chat, where he will actually see it */}
         <TelegramInline slave={slave} />
@@ -500,18 +539,42 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
           </div>
         )}
 
-        {/* rituals */}
+        {/* rituals — each button earns its devotion at most once per 24h */}
         <div className="thin-scroll mt-3 flex gap-2 overflow-x-auto pb-1">
-          {RITUALS.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => subRitual(slave.id, r.id)}
-              className="shrink-0 rounded-full border border-white/12 bg-white/[0.04] px-3.5 py-2 text-[12px] text-white/70 transition active:scale-95 hover:border-brass/40 hover:text-brass-soft"
-            >
-              <span className="mr-1.5 opacity-70">{r.icon}</span>
-              {r.label}
-            </button>
-          ))}
+          {RITUALS.map((r) => {
+            const st = ritualState(slave, r.id);
+            const cooling = !st.earned;
+            return (
+              <button
+                key={r.id}
+                onClick={() => {
+                  const res = subRitual(slave.id, r.id);
+                  if (res && !res.earned) {
+                    setNote(
+                      `${r.icon} ${r.label} has already earned devotion today · available again in ${timeLeft(
+                        res.resetsAt - Date.now()
+                      )}`
+                    );
+                    setTimeout(() => setNote(""), 3400);
+                  }
+                }}
+                title={cooling ? `Devotion already earned · again in ${timeLeft(st.resetsAt - Date.now())}` : `+${r.dev} devotion once per day`}
+                className={`shrink-0 rounded-full border px-3.5 py-2 text-[12px] transition active:scale-95 ${
+                  cooling
+                    ? "border-white/8 bg-white/[0.02] text-white/40 hover:border-amber-400/35"
+                    : "border-white/12 bg-white/[0.04] text-white/70 hover:border-brass/40 hover:text-brass-soft"
+                }`}
+              >
+                <span className="mr-1.5 opacity-70">{r.icon}</span>
+                {r.label}
+                {cooling && (
+                  <span className="ml-1.5 font-mono text-[9.5px] text-amber-200/85">
+                    ♥✓ {timeLeft(st.resetsAt - Date.now())}
+                  </span>
+                )}
+              </button>
+            );
+          })}
           <button
             onClick={pinLocation}
             disabled={locBusy}
