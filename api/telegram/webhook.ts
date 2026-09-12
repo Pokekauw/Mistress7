@@ -10,6 +10,12 @@
  *
  *  GET the same URL for a configuration report (no secrets).
  *
+ *  PUSH POLICY (kun 3 handlingsknapper pusher):
+ *   📜 Decree     → ✅ Ja, med lyd
+ *   📍 Check-in   → ✅ Ja, med lyd
+ *   👠 Send Media → ✅ Ja, med lyd
+ *   ✍️ Chat, ⚖️ Verdict, ⏳ auto-straf, ⛓️ penance/tribute/gag/lock/strike/mercy → ❌ kun i appen
+ *
  *  Runtime-agnostic: a standard (Request) => Response handler, so it runs
  *  unchanged on Vercel, Netlify Edge and Cloudflare Workers.
  *
@@ -128,8 +134,11 @@ async function claim(
   console.info(`[telegram] linked chat ${chatId} → houses/${houseId} code ${code}`);
   await reply(
     chatId,
-    "⛓️ <b>Linked.</b>\n\nYour Mistress can now reach you here.\n" +
-      "The phone only sounds for what matters: a decree, a check-in demand, or something she has sent you.\n\n" +
+    "⛓️ <b>Linked.</b>\n\nYour Mistress can now reach you here.\n\n" +
+      "📜 Decree — push med lyd\n" +
+      "📍 Check-in — push med lyd\n" +
+      "👠 Media — push med lyd\n\n" +
+      "✍️ Chat, ⚖️ Verdict, ⏳ Auto-straf, ⛓️ Penance/Tribute/Gag/Lock/Strike/Mercy — kun i appen.\n\n" +
       "<i>Return to the app — it confirms itself.</i>"
   );
   return json({ ok: true });
@@ -139,14 +148,12 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 export default async function handler(req: Request): Promise<Response> {
-  /* ---- health check: is this deployment configured? ---- */
   if (req.method === "GET") {
     return json({ service: "telegram-webhook", ...configStatus() }, canWriteFirestore() && SERVER_ENV.botToken ? 200 : 503);
   }
 
   if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 
-  /* Telegram echoes the secret back on every call — reject anything else */
   if (SERVER_ENV.webhookSecret && req.headers.get("x-telegram-bot-api-secret-token") !== SERVER_ENV.webhookSecret) {
     console.warn("[telegram] rejected webhook call with bad or missing secret token");
     return new Response("Forbidden", { status: 403 });
@@ -165,7 +172,6 @@ export default async function handler(req: Request): Promise<Response> {
   const chatId = msg.chat.id;
   const text = msg.text.trim();
 
-  /* ---- /start [CODE[__house]] ---- */
   if (text.startsWith("/start")) {
     const payload = text.split(/\s+/)[1]?.trim() || "";
     const { code, houseId } = parsePayload(payload);
@@ -181,22 +187,16 @@ export default async function handler(req: Request): Promise<Response> {
     return new Response("ok");
   }
 
-  /* ---- /stop ---- */
   if (text === "/stop") {
     await reply(chatId, "🔕 You will receive nothing further here.");
     return new Response("ok");
   }
 
-  /* ---- /status ---- */
   if (text === "/status") {
     await reply(chatId, `📜 Open the app to see your standing.${SERVER_ENV.appUrl ? `\n${SERVER_ENV.appUrl}` : ""}`);
     return new Response("ok");
   }
 
-  /* ---- a bare code, typed or pasted straight into the chat ----
-     This is how most people actually do it, so it must work without
-     the deep link. No house in the payload, so fall back to the
-     server's configured house. */
   const bare = text.replace(/\s+/g, "");
   if (CODE_RE.test(bare)) {
     return claim(chatId, bare.toUpperCase(), SERVER_ENV.houseId, msg.chat.username, msg.chat.first_name);
