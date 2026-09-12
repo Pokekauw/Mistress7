@@ -50,7 +50,7 @@ export default function App() {
   return (
     <>
       {view}
-      {inApp && (
+      {inApp && session.role === "mistress" && hash.startsWith("#/deck") && (
         <button
           onClick={() => {
             if (!confirm("Reset this house to an empty state?\n\nEvery submissive, invitation and record will be erased.")) return;
