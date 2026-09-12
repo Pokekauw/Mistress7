@@ -14,6 +14,7 @@ import { isUploadFail, uploadImage } from "./storage";
 import { canAddSlave, DEFAULT_PLAN, planHas, planOf, planRequiredFor, type Feature, type PlanId } from "./plans";
 import {
   buildAlert,
+  isPushKind,
   makeLinkCode,
   normaliseBotUsername,
   resolveBotUsername,
@@ -832,15 +833,16 @@ export function fireCommand(cmd: CommandId, ids: string[], arg?: string | number
   /* deliver once the state is settled, and report how each order travelled */
   outbound.forEach((o) => {
     const d = notifySlave(o.id, o.kind, o.body);
-    if (d !== "sent") result.undelivered.push({ name: getSlave(o.id)?.name || "unknown", why: d });
+    if (d !== "sent" && d !== "skipped") result.undelivered.push({ name: getSlave(o.id)?.name || "unknown", why: d });
   });
 
   return result;
 }
 
+/** An ordinary chat message. Per the push policy it lives in the app
+ *  only — it never buzzes his phone on Telegram. */
 export function sendMistressText(slaveId: string, text: string) {
   update((s) => mapSlave(pushMsg(s, { slaveId, from: "mistress", kind: "text", text }), slaveId, (x) => ({ ...x, lastTouched: Date.now() })));
-  notifySlave(slaveId, "decree", text);
 }
 
 /* ============================ invitations ⛓️ ============================
@@ -1356,17 +1358,23 @@ export function telegramLinkCode(slaveId: string): string {
   return code;
 }
 
-export type Delivery = "sent" | "unlinked" | "plan" | "failed";
+export type Delivery = "sent" | "unlinked" | "plan" | "failed" | "skipped";
 
 export const DELIVERY_LOOK: Record<Delivery, { icon: string; label: string }> = {
   sent: { icon: "🔔", label: "Delivered to his phone" },
   unlinked: { icon: "🔕", label: "Not on Telegram — he must open the app" },
   plan: { icon: "🔒", label: "Telegram requires a higher plan" },
   failed: { icon: "⚠️", label: "Telegram delivery failed" },
+  skipped: { icon: "🤫", label: "Not push-worthy — he sees it in the app only" },
 };
 
 /**
  * Deliver an alert if the plan allows it and the chat is linked.
+ *
+ * ⚖️  PUSH POLICY — only three things may buzz his phone:
+ *    a decree, a check-in demand, or media she has sent him.
+ * Anything else (chat messages, verdicts, penalties, gags, locks,
+ * penance, tribute) returns "skipped" and never reaches Telegram.
  *
  * Still fire-and-forget — a notification must never block or reverse a
  * command — but the outcome is now recorded rather than discarded. That
@@ -1374,6 +1382,7 @@ export const DELIVERY_LOOK: Record<Delivery, { icon: string; label: string }> = 
  * and she should not punish silence she never actually demanded out loud.
  */
 export function notifySlave(slaveId: string, kind: AlertKind, body: string): Delivery {
+  if (!isPushKind(kind)) return "skipped";
   if (!has("telegram")) return "plan";
   const sl = getSlave(slaveId);
   const chatId = sl?.telegram?.chatId;
@@ -1929,13 +1938,7 @@ export function judgeProof(msgId: string, accept: boolean) {
     );
   });
 
-  const target = state.messages.find((m) => m.id === msgId)?.slaveId;
-  if (target)
-    notifySlave(
-      target,
-      "verdict",
-      accept ? "Your proof was accepted. Adequate. (+8 devotion)" : "Your proof was rejected. Do it again. (+1 strike)"
-    );
+  /* a verdict is not push-worthy — he reads it in the app */
 }
 
 /* ============================ location ============================ */
@@ -2045,14 +2048,7 @@ export function sweepLocationRequests() {
     return next;
   });
 
-  /* tell him his silence cost him — after the state has settled */
-  overdue.forEach((req) =>
-    notifySlave(
-      req.slaveId,
-      "verdict",
-      "You ignored a check-in. One strike entered, six devotion lost, and a penance assigned. ⏳⛓️"
-    )
-  );
+  /* the penalty stands, but it is not push-worthy — he reads it in the app */
 }
 
 export function mapLinks(lat: number, lng: number) {

@@ -164,6 +164,23 @@ export async function sendTelegram(msg: TelegramMessage): Promise<boolean> {
 
 export type AlertKind = "decree" | "penance" | "checkin" | "tribute" | "media" | "gag" | "lock" | "verdict";
 
+/**
+ * The push policy, in one list.
+ *
+ * The phone only buzzes for the three things that cannot wait:
+ *   • a decree she has issued
+ *   • a check-in she has demanded
+ *   • media she has sent him
+ *
+ * Everything else — ordinary chat messages, verdicts, penalties, gags,
+ * locks, penance, tribute — stays inside the app and never wakes him.
+ */
+export const PUSH_KINDS: readonly AlertKind[] = ["decree", "checkin", "media"];
+
+export function isPushKind(kind: AlertKind): boolean {
+  return PUSH_KINDS.includes(kind);
+}
+
 const TEMPLATES: Record<AlertKind, { title: string; cta: string }> = {
   decree: { title: "📜 <b>A decree from your Mistress</b>", cta: "Read it" },
   penance: { title: "⛓️ <b>Penance assigned</b>", cta: "Submit proof" },
