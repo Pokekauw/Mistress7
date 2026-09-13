@@ -28,41 +28,30 @@ merely hidden in the UI.
 ## 1 · Database
 
 Firebase Console → **Build → Firestore Database → Create database** (region `eur3` for Europe).
-Then **Build → Storage → Get started** for media rewards 👠.
 
-Publish the rules:
+That is the whole setup. Publish the rules:
 
 - Firestore → **Rules** → paste [`firestore.rules`](firestore.rules)
-- Storage → **Rules** → paste [`storage.rules`](storage.rules). Keep the
-  `{file=**}` wildcard: uploads land in a *folder* segment
-  (`dominion-media/{houseId}/media/…`), and a single-segment `{file}` matches
-  nothing at all — which rejects every upload with a 403 that looks like a
-  configuration mystery.
 
 `.env` is already populated with the `house-of-dom` keys.
 
-### The Storage bucket ⚠️
+### Firebase Storage is not used ⛔
 
-The bucket is **`house-of-dom.firebasestorage.app`**, and it is named explicitly
-in code — `getStorage(app, STORAGE_BUCKET)` in [`src/firebase.ts`](src/firebase.ts):
+**Do not create a Storage bucket for this app.** It was dropped deliberately:
 
-```ts
-_storage = getStorage(_app, STORAGE_BUCKET);   // never getStorage(_app) alone
-```
+- it requires a paid **Blaze** project — the free Spark plan refuses every upload;
+- its CORS preflight fails from this app's single-file static build, and the
+  browser reports the failure as an opaque CORS error.
 
-Why that matters: `getStorage(app)` on its own reads `app.options.storageBucket`,
-and when `VITE_FIREBASE_STORAGE_BUCKET` was never set at build time that value is
-`""` — which the SDK accepts as a bucket *name*. Every request then goes to
+Images are stored **inline in Firestore** instead (§4). Consequently:
 
-```
-https://firebasestorage.googleapis.com/v0/b//o/…      ← empty bucket segment
-```
-
-and fails with a 400 that the browser reports as an opaque CORS error. Passing the
-bucket explicitly makes that state unreachable. `VITE_FIREBASE_STORAGE_BUCKET`
-still wins when it is set (a `gs://…` prefix, a pasted URL or a trailing slash are
-all normalised first — see `normaliseBucket()` in `src/lib/env.ts`), and the
-resolved bucket is printed to the console on every boot.
+- `src/firebase.ts` never calls `getStorage()` — the Storage SDK is not imported
+  anywhere in the bundle, so nothing can reach `firebasestorage.googleapis.com`;
+- `VITE_FIREBASE_STORAGE_BUCKET` is **not read** any more and can be deleted
+  from your host's environment variables;
+- [`storage.rules`](storage.rules) is optional. If a bucket already exists,
+  publishing it refuses writes (nothing new can be billed) while keeping reads
+  open, so images uploaded before the switch keep rendering.
 
 > **Vercel:** `VITE_` values are inlined at *build* time. Setting one after a build
 > changes nothing until you redeploy.
@@ -100,9 +89,10 @@ houses/{houseId}
   │
   ├─ punishments/{logId}   discipline record — Mistress-write only
   ├─ decrees/{msgId}       decrees, penances, proofs, check-ins
-  │    imageUrl           📸 the Storage download URL of the attachment
-  │    fileName/fileUrl   proof attachment name + URL
-  │    mediaUrl           older name for the same URL (kept for compatibility)
+  │    imageUrl           📸 the attachment as an inline data: URL — the
+  │                          image itself, one full copy per message
+  │    fileName/fileMime  proof attachment name + type
+  │    mediaLock/…        how the reward is locked, and whether he opened it
   ├─ locations/{id}        📍 pins
   └─ pushSubscriptions/    devices that can receive push
 ```
@@ -129,43 +119,67 @@ withdraw it at any time without destroying his record.
 
 ## 4 · How images are handled 📸
 
-Every image in the app goes through one path — `uploadImage()` in `src/lib/storage.ts`:
+**Everything is inline.** There is no Firebase Storage in this app — no bucket,
+no upload, no download URL. Every image in the app goes through one path,
+`uploadImage()` in [`src/lib/storage.ts`](src/lib/storage.ts):
 
 1. **Compressed in the browser.** Downscaled to a max edge, then quality is
-   stepped down until the result fits a target size. A 1.4 MB photo typically
-   lands under 200 KB before anything leaves the device.
-2. **Uploaded with `uploadBytes(ref(storage, path), file)`** into
-   `dominion-media/{houseId}/{proof|media|avatars|backdrops}/`.
-3. **`getDownloadURL()` is called on the very same ref**, and only that short
-   URL is handed back to the caller.
-4. **The URL is saved as `imageUrl`** — on the message itself (`Msg.imageUrl`,
-   written by `sendMedia()` and `submitProof()`) and on the Firestore message
-   document `houses/{houseId}/decrees/{msgId}.imageUrl` (written by
-   `mirrorCollections()` in `src/lib/fire.ts`).
+   stepped down — and then the canvas itself — until the result fits the
+   inline budget. The loop has no iteration cap, so it cannot hand back an
+   oversized image: a 1.4 MB phone photo lands around 190 KB.
+2. **Read as a `data:` URL** with a `FileReader`. No network is involved, so
+   there is nothing that can fail with a Storage, CORS or quota error.
+3. **Stored as `imageUrl`** — the base64 string itself, on the message
+   (`Msg.imageUrl`, written by `sendMedia()` and `submitProof()`) and on that
+   message's own Firestore document `houses/{houseId}/decrees/{msgId}`
+   (written by `mirrorCollections()` in `src/lib/fire.ts`).
 
 ```ts
-const r = ref(storage, path);                 // dominion-media/{houseId}/media/…
-await uploadBytes(r, payload, { contentType, cacheControl });
-const url = await getDownloadURL(r);          // ← exactly this string is stored
+const compressed = await compressImage(file, opts);   // ≤ INLINE_CEILING bytes
+const url = await toDataUrl(compressed);              // "data:image/jpeg;base64,…"
+// → stored verbatim as Msg.imageUrl. That is the whole pipeline.
 ```
 
 The UI reads it back through `attachmentUrl(msg)`, which prefers `imageUrl` and
 falls back to the older nested `media.url` / `file.url`, so messages written
-before the field existed still render.
+earlier — including ones that still hold a `https://firebasestorage…` URL from
+before the switch — keep rendering.
 
-> **Why this matters.** Firestore documents are capped at **1 MiB**, and base64
-> inflates bytes by ~33%. Proof images used to be inlined as data URLs directly
-> into the house document, so a single large photo could exceed the cap and
-> silently break *every* subsequent write. Storage keeps documents tiny — and
-> `attachmentUrlOf()` in `fire.ts` refuses to write a `data:` URL into the
-> mirrored message document for the same reason.
+### The one limit, and how the numbers fit together
 
-`pushHouse()` also carries a safety net: if the document ever approaches
-800 KB it strips oversized inline payloads and trims the oldest messages, so a
-regression can never wedge the house.
+Firestore caps a document at **1 MiB**, and base64 turns 3 bytes into 4
+characters. Both numbers in `src/lib/storage.ts` are derived from that single
+fact, so the compressor and the ceiling cannot disagree:
 
-Without Firebase configured, small images (< 320 KB compressed) are still
-stored inline so local mode keeps working; larger ones report a clear error.
+| Constant | Value | Meaning |
+|---|---|---|
+| `FIRESTORE_DOC_LIMIT` | 1 048 576 | Firestore's hard cap per document |
+| `INLINE_STRING_BUDGET` | 260 000 | characters one attachment may occupy in a document |
+| `INLINE_CEILING` | 194 976 | the same budget in raw image bytes — what compression targets |
+
+`INLINE_CEILING` is *calculated* from `INLINE_STRING_BUDGET`
+(`(budget − header) × 3 ÷ 4`), and `compressImage()` clamps every caller's
+`targetBytes` down to it. That is what removed the old failure mode, where a
+caller asked for a 400 KB image against a 320 KB ceiling and the upload died
+with "too large" *after* compression had succeeded.
+
+The image is also stored **once per message**: `sendMedia()` empties
+`media.url` and `submitProof()` empties `file.url`, keeping the bytes only in
+`imageUrl`. Duplicating them would halve how many images fit.
+
+### What that means in practice
+
+- **The sync document keeps the newest images.** `houses/{houseId}` carries the
+  whole state, so when it approaches 800 KB, `slimForFirestore()` drops the
+  *oldest* inline images first and whole messages last. The full copy of every
+  attachment stays in its own `decrees/{msgId}` document either way.
+- **Avatars and backdrops are held to a tighter budget** (120 KB / 160 KB) —
+  they live in the house document permanently.
+- **Non-image files** (video, audio, PDF) cannot be compressed, so they are
+  stored as they are and are refused above `INLINE_CEILING` (~190 KB) with a
+  message that names that limit. Photos are the supported path.
+- **Without Firebase configured**, the exact same inline path is used — local
+  mode and Firestore mode no longer differ.
 
 ## 5 · Telegram notification engine 🔔
 

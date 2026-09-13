@@ -22,7 +22,8 @@ export default function BgPicker({
   const upload = async (f: File) => {
     setBusy(true);
     try {
-      const r = await uploadImage(f, "backdrops", { max: 1600, targetBytes: 350_000 });
+      /* stored inline in the house document, so keep it light */
+      const r = await uploadImage(f, "backdrops", { max: 1600, targetBytes: 160_000 });
       if (!isUploadFail(r)) onChange({ kind: "image", value: r.url });
     } finally {
       setBusy(false);

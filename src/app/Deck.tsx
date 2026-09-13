@@ -481,7 +481,7 @@ function Thread({ slave }: { slave: Slave }) {
             );
           if (m.kind === "media") return <MediaBubble key={m.id} m={m} side="right" />;
           if (m.kind === "proof") {
-            /* msg.imageUrl first — the Storage URL — then the nested file.url */
+            /* msg.imageUrl first — the inline data: URL — then the nested file.url */
             const proofUrl = attachmentUrl(m);
             return (
               <div key={m.id} className="rounded-xl border border-violet-400/30 bg-violet-500/8 p-3">
@@ -957,7 +957,7 @@ function InvitesTab() {
 
         {/* ---------- legacy cleanup ---------- */}
         <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4">
-          <div className="label">🔍 Verify Storage</div>
+          <div className="label">🔍 Verify Firestore</div>
           <p className="mt-1.5 text-[11.5px] leading-relaxed text-white/40">
             Confirm an invitation exists in Firestore under{" "}
             <span className="font-mono text-white/55">houses/{HOUSE_ID}/invites/&#123;token&#125;</span>. The token is

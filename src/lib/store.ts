@@ -10,7 +10,7 @@ import {
   type Invite,
 } from "./invites";
 import { HOUSE_ID, isFirebase } from "../firebase";
-import { deleteMedia, isUploadFail, uploadImage } from "./storage";
+import { isUploadFail, uploadImage } from "./storage";
 import { canAddSlave, DEFAULT_PLAN, planHas, planOf, planRequiredFor, type Feature, type PlanId } from "./plans";
 import {
   buildAlert,
@@ -136,13 +136,18 @@ export type Msg = {
   status?: "pending" | "paid" | "declined";
   /** a tribute offer (kind === "tribute") offered against this demand message id */
   demandId?: string;
-  /** proof attachment — `url` is a Storage link, never raw file bytes */
+  /**
+   * Proof attachment metadata. `url` is null for anything written since
+   * Firebase Storage was dropped — the bytes live in `imageUrl` instead, and
+   * only there, so a document never carries the same base64 twice.
+   * `path` is legacy: it named a Storage object, and nothing writes it now.
+   */
   file?: { name: string; url: string | null; mime: string; size: number; path?: string | null };
   /**
-   * The attachment's public URL — exactly what `getDownloadURL()` returned
-   * after `uploadBytes()` (a Storage link when remote, a small `data:` URL
-   * in local mode). It lives on the message itself so the Firestore document
-   * carries the image reference without anyone having to walk `media`/`file`.
+   * THE attachment: an inline `data:` URL holding the compressed image bytes.
+   * This is what the database stores — there is no Storage URL any more.
+   * Documents written before the switch still hold an https URL here, and
+   * `attachmentUrl()` renders either.
    */
   imageUrl?: string | null;
   verdict?: "pending" | "accepted" | "rejected";
@@ -170,9 +175,9 @@ export type { Invite } from "./invites";
 /**
  * The URL a message's attachment should be rendered from.
  *
- * `imageUrl` is authoritative — it is verbatim what `getDownloadURL()`
- * returned after `uploadBytes()`. The nested `media.url` / `file.url` stay as
- * fallbacks so documents written before the field existed still display.
+ * `imageUrl` is authoritative — it holds the inline `data:` URL. The nested
+ * `media.url` / `file.url` stay as fallbacks so documents written before the
+ * field existed (or while Storage was still in use) still display.
  */
 export function attachmentUrl(m: Msg): string | null {
   const found = [m.imageUrl, m.media?.url, m.file?.url].find(
@@ -2380,9 +2385,12 @@ export function sendMedia(
         kind: "media",
         title: media.lock === "free" ? "Reward Granted" : "Locked Teaser",
         text: caption,
-        /* the Storage download URL, straight from getDownloadURL() */
+        /* THE image: an inline data: URL. Stored here and only here —
+           `media.url` is emptied on purpose, because the same base64 in two
+           fields would halve how many images fit in the 1 MiB house
+           document. `attachmentUrl()` reads imageUrl first. */
         imageUrl: media.url || null,
-        media: { ...media, unlocked: media.lock === "free", views: 0, burned: false },
+        media: { ...media, url: "", unlocked: media.lock === "free", views: 0, burned: false },
       });
       next = mapSlave(next, id, (x) => ({ ...x, lastTouched: Date.now() }));
     });
@@ -2503,8 +2511,8 @@ export function submitProof(
         kind: "proof",
         title: "Proof Submitted",
         text: note || "Proof of compliance submitted for judgement.",
-        file,
-        /* the Storage download URL of the proof image */
+        /* name/mime/size for the caption; the bytes live in imageUrl alone */
+        file: { ...file, url: null },
         imageUrl: file.url || null,
         verdict: "pending",
       }),
@@ -2770,14 +2778,9 @@ export function sweepAttentionDebt() {
  * — including stored proof and reward files — is destroyed.
  */
 export function clearChat(slaveId: string) {
-  /* best-effort: delete backing Storage objects before the messages vanish */
-  state.messages
-    .filter((m) => m.slaveId === slaveId)
-    .forEach((m) => {
-      void deleteMedia(m.file?.path ?? null);
-      void deleteMedia(m.media?.path ?? null);
-    });
-
+  /* Nothing lives outside the message documents any more — the images are
+     inline base64 on the messages themselves, so dropping the messages
+     drops the images with them. There is no bucket to clean up. */
   update((s) => {
     let next: State = { ...s, messages: s.messages.filter((m) => m.slaveId !== slaveId) };
     next = pushMsg(next, {
@@ -2832,14 +2835,14 @@ export function mapLinks(lat: number, lng: number) {
 }
 
 /**
- * Prepare a proof attachment: compress in the browser, push the bytes to
- * Storage, and return only the short URL. Nothing large ever reaches
- * Firestore, which is what used to break ~1.4 MB photos.
+ * Prepare a proof attachment: compress in the browser until it fits the
+ * inline budget, then read it as a data: URL. That string is the attachment —
+ * it is stored in Firestore as it is, with no upload step and no bucket.
  */
 export async function fileToAttachment(
   file: File
 ): Promise<{ name: string; url: string | null; mime: string; size: number; path?: string | null } | { error: string }> {
-  const r = await uploadImage(file, "proof", { max: 1600, targetBytes: 400_000 });
+  const r = await uploadImage(file, "proof", { max: 1600 });
   if (isUploadFail(r)) return { error: r.error };
   return { name: file.name, url: r.url, mime: file.type, size: r.bytes, path: r.path };
 }

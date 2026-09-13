@@ -22,7 +22,7 @@ export default function MediaBubble({
   const locked = !media.unlocked;
   const burned = media.burned;
   const isImage = (media.mime || "").startsWith("image/");
-  /** the Storage download URL (msg.imageUrl), falling back to the nested field */
+  /** the inline data: URL (msg.imageUrl), falling back to the nested field */
   const url = attachmentUrl(m);
 
   const lockLabel =
@@ -107,8 +107,11 @@ export default function MediaBubble({
               <img src={url} alt={media.name} className="max-h-72 w-full cursor-zoom-in object-cover" />
             </button>
           ) : (
+            /* a data: URL cannot be opened in a new tab — browsers block
+               top-level navigation to it — so it is offered as a download */
             <a
               href={url || undefined}
+              download={media.name || undefined}
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-3 px-4 py-5 transition hover:bg-white/[0.03]"

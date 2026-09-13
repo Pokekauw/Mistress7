@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { money, sendMedia, TEASE_CAPTIONS, type LockKind } from "../lib/store";
-import { makeBlurPreview, uploadMedia } from "../lib/storage";
-import { isFirebase as isRemote } from "../firebase";
+import { isUploadFail, makeBlurPreview, uploadImage } from "../lib/storage";
 
 export default function MediaComposer({
   targets,
@@ -39,10 +38,12 @@ export default function MediaComposer({
     if (!file || !targets.length) return;
     setBusy(true);
     setErr("");
-    const up = await uploadMedia(file);
-    if (!up) {
+    /* no upload happens: the image is compressed and stored inline, and the
+       reason for a refusal is passed straight through to him */
+    const up = await uploadImage(file, "media");
+    if (isUploadFail(up)) {
       setBusy(false);
-      setErr("That file is too large to store. Try a smaller image. 🖤");
+      setErr(up.error);
       return;
     }
     const preview = await makeBlurPreview(file);
@@ -203,9 +204,8 @@ export default function MediaComposer({
         {err && <p className="mt-3 text-[12px] text-rose-300">{err}</p>}
 
         <p className="mt-3 text-[10.5px] leading-relaxed text-white/30">
-          {isRemote
-            ? "🖤 Stored in Firebase Storage — survives reloads on every device."
-            : "🖤 Local mode — stored inline until Firebase is configured."}
+          🖤 Compressed and stored inline in the database — no upload, so it survives
+          reloads on every device.
         </p>
 
         <div className="mt-5 flex gap-2">
@@ -221,7 +221,7 @@ export default function MediaComposer({
                 : "cursor-not-allowed border-white/8 text-white/25"
             }`}
           >
-            {busy ? "⏳ Uploading…" : "Send 👠"}
+            {busy ? "⏳ Preparing…" : "Send 👠"}
           </button>
         </div>
       </div>
