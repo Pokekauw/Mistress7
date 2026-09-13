@@ -307,7 +307,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
           <button
             onClick={() => setSheet("limits")}
             title="Your hard limits"
-            className="shrink-0 rounded-full border border-white/12 px-2.5 py-1.5 text-[11.5px] text-white/55 transition hover:border-white/25"
+            className="shrink-0 rounded-full border border-rose-400/65 px-2.5 py-1.5 text-[11.5px] text-rose-100 ring-1 ring-rose-500/70 shadow-[0_0_0_3px_rgba(244,63,94,0.16),0_0_18px_rgba(244,63,94,0.22)] transition hover:border-rose-300 hover:bg-rose-500/10"
           >
             Limits
           </button>

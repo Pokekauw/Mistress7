@@ -14,8 +14,8 @@ import {
  *  ⏳ Attention debt, as a cooldown bar.
  *
  *  What is left of his silence window drains from full to empty. The bar
- *  breathes — ribs drifting towards the drain, a shine sweeping along it —
- *  so it reads as something running, not something printed. Under chastity
+ *  breathes with a slow white shine sweeping across it now and then, so it
+ *  reads as something running, not something printed. Under chastity
  *  the window is six hours and the fine is doubled, and the bar says so.
  * ------------------------------------------------------------------ */
 
@@ -37,26 +37,29 @@ export default function AttentionDebtBar({
   const base = disciplineOf(dungeon).attention;
   const cost = locked ? base * CHASTITY_DAMAGE_MULTIPLIER : base;
 
-  const urgent = overdue || remaining <= 15;
-  const warn = !urgent && remaining <= 40;
+  const leftHours = left / 3_600_000;
+
+  const urgent = overdue || leftHours <= 2;
 
   const fill = overdue
-    ? "bg-gradient-to-r from-rose-600/85 to-rose-400/70"
-    : urgent
-      ? "bg-gradient-to-r from-rose-500/80 to-rose-300/65"
-      : warn
-        ? "bg-gradient-to-r from-amber-500/75 to-amber-300/60"
-        : "bg-gradient-to-r from-brass/75 to-brass-soft/55";
+    ? "bg-gradient-to-r from-rose-700/90 to-rose-400/75"
+    : leftHours > 8
+      ? "bg-gradient-to-r from-emerald-500/85 to-lime-300/70"
+      : leftHours > 4
+        ? "bg-gradient-to-r from-yellow-500/85 to-yellow-300/70"
+        : leftHours > 2
+          ? "bg-gradient-to-r from-orange-500/85 to-orange-300/70"
+          : "bg-gradient-to-r from-rose-600/90 to-rose-300/75";
 
   const frame = overdue
     ? "border-rose-400/45 bg-rose-500/[0.08]"
-    : urgent
-      ? "border-rose-400/35 bg-rose-500/[0.05]"
-      : warn
-        ? "border-amber-400/35 bg-amber-500/[0.05]"
-        : locked
-          ? "border-violet-400/35 bg-violet-500/[0.05]"
-          : "border-white/10 bg-white/[0.02]";
+    : leftHours > 8
+      ? "border-emerald-400/30 bg-emerald-500/[0.045]"
+      : leftHours > 4
+        ? "border-yellow-300/35 bg-yellow-500/[0.05]"
+        : leftHours > 2
+          ? "border-orange-400/35 bg-orange-500/[0.06]"
+          : "border-rose-400/35 bg-rose-500/[0.06]";
 
   return (
     <div className={`rounded-xl border px-3.5 py-2.5 ${frame}`}>
