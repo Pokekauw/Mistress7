@@ -55,24 +55,33 @@ export function AvatarPlate({
   name,
   honorific,
   src,
+  compact = false,
 }: {
   name: string;
   honorific: string;
   src?: string;
+  /** tighter portrait and type — for the slave's own header, where space is dear */
+  compact?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className={`flex items-center ${compact ? "gap-2.5" : "gap-3"}`}>
       <div className="relative">
-        <Avatar size={44} src={src} />
-        <span className="absolute -right-0.5 -bottom-0.5 flex h-4 w-4 items-center justify-center rounded-full border border-[#0a0709] bg-emerald-400 text-[7px]">
+        <Avatar size={compact ? 34 : 44} src={src} />
+        <span
+          className={`absolute -right-0.5 -bottom-0.5 flex items-center justify-center rounded-full border border-[#0a0709] bg-emerald-400 ${
+            compact ? "h-3 w-3 text-[6px]" : "h-4 w-4 text-[7px]"
+          }`}
+        >
           ●
         </span>
       </div>
       <div className="min-w-0">
-        <div className="font-display truncate text-[1.15rem] leading-tight text-white">
+        <div
+          className={`font-display truncate leading-tight text-white ${compact ? "text-[1rem]" : "text-[1.15rem]"}`}
+        >
           {honorific} {name} 👑
         </div>
-        <div className="label !text-emerald-300/70">watching</div>
+        <div className={`label !text-emerald-300/70 ${compact ? "!text-[9px] !tracking-[0.18em]" : ""}`}>watching</div>
       </div>
     </div>
   );

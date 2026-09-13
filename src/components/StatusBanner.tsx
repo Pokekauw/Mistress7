@@ -1,25 +1,30 @@
+import AttentionDebtBar from "./AttentionDebtBar";
 import {
-  attentionDeadline,
+  CHASTITY_DAMAGE_MULTIPLIER,
   isGagged,
   isLocked,
   rankOf,
   timeLeft,
+  type Dungeon,
   type Msg,
   type Slave,
 } from "../lib/store";
 
 /**
  * The first thing he sees. One glance must answer: am I under discipline,
- * and is anything owed? Silence is itself a state, and it is stated.
+ * and is anything owed? Silence is itself a state, and it is stated — as a
+ * running bar, not as a sentence he has to read.
  */
 export default function StatusBanner({
   slave,
+  dungeon,
   pendingProof,
   openCheckIn,
   pendingTribute,
   onAct,
 }: {
   slave: Slave;
+  dungeon?: Dungeon | null;
   pendingProof: boolean;
   openCheckIn?: Msg;
   pendingTribute?: Msg;
@@ -28,10 +33,6 @@ export default function StatusBanner({
   const gag = isGagged(slave);
   const lock = isLocked(slave);
   const now = Date.now();
-
-  /* ⏳ his attention-debt window — chat or act, or devotion is taken automatically */
-  const debtLeft = attentionDeadline(slave) - now;
-  const debtHours = slave.attentionHours && slave.attentionHours > 0 ? slave.attentionHours : 12;
 
   type Item = {
     icon: string;
@@ -43,18 +44,6 @@ export default function StatusBanner({
   };
 
   const items: Item[] = [];
-
-  /* always visible — the silence timer never stops */
-  items.push({
-    icon: "⏳",
-    label: `Attention debt · ${debtHours}h window`,
-    value:
-      debtLeft > 0
-        ? `${timeLeft(debtLeft)} until silence costs 10 devotion — chat or serve`
-        : "Overdue — devotion is being taken",
-    tone: debtLeft < 3600_000 ? "rose" : debtLeft < 3 * 3600_000 ? "amber" : "brass",
-    urgent: debtLeft < 3600_000,
-  });
 
   if (openCheckIn)
     items.push({
@@ -70,7 +59,7 @@ export default function StatusBanner({
     items.push({
       icon: "🔒",
       label: "Held in chastity",
-      value: timeLeft(slave.lockUntil - now),
+      value: `${timeLeft(slave.lockUntil - now)} · every loss doubled ×${CHASTITY_DAMAGE_MULTIPLIER}`,
       tone: "violet",
     });
 
@@ -136,15 +125,20 @@ export default function StatusBanner({
         </span>
       </div>
 
+      {/* ⏳ the silence timer — always running, always visible */}
+      <div className="px-2.5 pt-2.5">
+        <AttentionDebtBar slave={slave} dungeon={dungeon} />
+      </div>
+
       {clear ? (
-        <div className="px-4 py-5 text-center">
+        <div className="px-4 py-4 text-center">
           <p className="font-display text-[1.15rem] text-white/80 italic">No conditions upon you.</p>
           <p className="mt-1 text-[12px] text-white/40">
-            Nothing is owed. See that it stays that way. 🖤
+            Nothing is owed but your voice. See that it stays that way. 🖤
           </p>
         </div>
       ) : (
-        <div className="divide-y divide-white/6">
+        <div className="mt-2.5 divide-y divide-white/6 border-t border-white/6">
           {items.map((it, i) => (
             <div key={i} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${TONE[it.tone]}`}>
               <span className={`text-[17px] ${it.urgent ? "animate-pulse" : ""}`}>{it.icon}</span>

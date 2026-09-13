@@ -1,4 +1,11 @@
-import { RANKS, type Dungeon } from "../lib/store";
+import {
+  CHASTITY_ATTENTION_HOURS,
+  CHASTITY_DAMAGE_MULTIPLIER,
+  DEFAULT_ATTENTION_HOURS,
+  disciplineOf,
+  RANKS,
+  type Dungeon,
+} from "../lib/store";
 
 /* ------------------------------------------------------------------ *
  *  Two sheets a submissive can open from his own header:
@@ -104,6 +111,9 @@ export function HouseRulesSheet({ dungeon, onClose }: { dungeon: Dungeon; onClos
 /* --------------------------------- guide --------------------------------- */
 
 export function GuideSheet({ dungeon, onClose }: { dungeon: Dungeon; onClose: () => void }) {
+  /* her own prices — she sets them, so the guide quotes them, not the defaults */
+  const costs = disciplineOf(dungeon);
+
   return (
     <Sheet onClose={onClose} accent="plum">
       <div className="text-center">
@@ -155,9 +165,27 @@ export function GuideSheet({ dungeon, onClose }: { dungeon: Dungeon; onClose: ()
 
       <Section icon="⏳" title="Silence has a price">
         <p>
-          Your attention timer runs whenever you are absent. If it expires in silence you are fined{" "}
-          <span className="text-rose-200">10 ♥</span> automatically — no warning, no argument. A message, a ritual,
-          a tribute, a proof, a location pin: any of them winds the window back to the start.
+          Your attention timer runs whenever you are absent, and it is drawn as a bar above your standing: full when you
+          have just served her, draining towards nothing. If it empties in silence you are fined{" "}
+          <span className="text-rose-200">{costs.attention} ♥</span> automatically — no warning, no argument — and the
+          bar starts again. A message, a ritual, a tribute, a proof, a location pin: any of them winds it back to full.
+        </p>
+        <p className="text-white/45">
+          The window is normally {DEFAULT_ATTENTION_HOURS} hours. She may set it shorter or longer for you alone.
+        </p>
+      </Section>
+
+      <Section icon="🔒" title="Chastity is a different animal">
+        <p>
+          While she holds you locked you are on{" "}
+          <span className="text-violet-200">double damage ×{CHASTITY_DAMAGE_MULTIPLIER}</span>: a fine of{" "}
+          {costs.attention} ♥ becomes {costs.attention * CHASTITY_DAMAGE_MULTIPLIER} ♥, and every strike, every missed
+          check-in, every rejected proof costs twice what it would otherwise.
+        </p>
+        <p>
+          Your leash shortens too — <span className="text-violet-200">{CHASTITY_ATTENTION_HOURS} hours</span> to speak
+          or serve, instead of {DEFAULT_ATTENTION_HOURS}. The bar says so while the lock is on. Rewards are never
+          doubled; only the pain is.
         </p>
       </Section>
 
@@ -206,14 +234,14 @@ export function GuideSheet({ dungeon, onClose }: { dungeon: Dungeon; onClose: ()
 
       <Section icon="⌨" title="Around your screen">
         <p>
-          <span className="text-white/75">Top right</span> — Limits, Exit, and beneath them House Rules and this
-          Guide. On a wide screen your name sits there too, with the 🗝️ code beneath it: your permanent key, which
-          never expires unless she takes it from you.
+          <span className="text-white/75">At the top</span> — her name, and the way out: Limits and Exit. Underneath,
+          one slim line is yours: your name, your rank, and the 🗝️ code that lets you back in. Touch either and the
+          code is shown in full. It never expires unless she takes it from you.
         </p>
         <p>
           <span className="text-white/75">In the chat</span> — every message carries the time it was sent. ✓ means
-          she has it; ✓✓ means she has seen it. When she is writing, you will see it — and she sees when you are
-          writing too.
+          she has it; ✓✓ means she has seen it, with the hour she saw it. When she is writing, you will see it — and
+          she sees when you are writing too. A link in a message is a link: tap it and it opens.
         </p>
         <p>
           <span className="text-white/75">📜 Command log</span> — the unglamorous record of every order and outcome.

@@ -14,6 +14,8 @@ import { HOUSE_ID, isFirebase } from "../firebase";
 import SlaveDrawer from "../components/SlaveDrawer";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import StrikeModal from "../components/StrikeModal";
+import Linkify from "../components/Linkify";
+import DisciplineCosts from "../components/DisciplineCosts";
 import PunishmentWheel from "../components/PunishmentWheel";
 import {
   ACCESS_LOOK,
@@ -255,7 +257,7 @@ function Thread({ slave }: { slave: Slave }) {
                   m.kind === "refusal" ? "border-rose-400/70 bg-rose-500/8 text-rose-100/85" : "border-white/20 bg-white/[0.03] text-white/55"
                 }`}
               >
-                {m.text}
+                <Linkify text={m.text} />
                 <div className="mt-1 flex items-center gap-1.5">
                   <Stamp at={m.time} className="text-white/25" />
                   {m.from === "mistress" && <ReadTicks m={m} />}
@@ -286,7 +288,7 @@ function Thread({ slave }: { slave: Slave }) {
                     m.from === "mistress" ? "text-brass-soft/90" : "text-white/60"
                   }`}
                 >
-                  {m.text}
+                  <Linkify text={m.text} />
                 </div>
                 {m.ritual && (
                   <div
@@ -369,8 +371,9 @@ function Thread({ slave }: { slave: Slave }) {
                         ? "tribute offered · accept it below ⬇"
                         : "awaiting payment"}
                 </span>
-                <div className="mt-0.5">
+                <div className="mt-0.5 flex items-center justify-center gap-1.5">
                   <Stamp at={m.time} className="text-white/25" />
+                  {m.from === "mistress" && <ReadTicks m={m} className="ml-1" />}
                 </div>
               </div>
             );
@@ -447,7 +450,11 @@ function Thread({ slave }: { slave: Slave }) {
                     📎 {m.file?.name || "file"} · {Math.round((m.file?.size || 0) / 1024)} KB
                   </div>
                 )}
-                {m.text && <p className="mt-2 text-[12.5px] text-white/70">{m.text}</p>}
+                {m.text && (
+                  <p className="mt-2 text-[12.5px] text-white/70">
+                    <Linkify text={m.text} />
+                  </p>
+                )}
                 {m.verdict === "pending" && (
                   <div className="mt-3 flex gap-2">
                     <button
@@ -468,18 +475,25 @@ function Thread({ slave }: { slave: Slave }) {
             );
           const mine = m.from === "mistress";
           return (
-            <div key={m.id} className={`flex items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
-              {!mine && <SlaveAvatar size={28} src={avatarFor(slave, dungeon)} name={slave.name} />}
-              <div
-                className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-snug ${
-                  mine
-                    ? "font-display rounded-br-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
-                    : "rounded-bl-md border border-white/10 bg-white/[0.05] text-white/80"
-                }`}
-              >
-                {m.text}
+            <div key={m.id} className={`flex flex-col ${mine ? "items-end" : "items-start"}`}>
+              <div className={`flex w-full items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
+                {!mine && <SlaveAvatar size={28} src={avatarFor(slave, dungeon)} name={slave.name} />}
+                <div
+                  className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-snug [overflow-wrap:anywhere] ${
+                    mine
+                      ? "font-display rounded-br-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
+                      : "rounded-bl-md border border-white/10 bg-white/[0.05] text-white/80"
+                  }`}
+                >
+                  <Linkify text={m.text} className={mine ? "" : "text-white"} />
+                </div>
+                {mine && <Avatar size={28} src={dungeon.avatarUrl} />}
               </div>
-              {mine && <Avatar size={28} src={dungeon.avatarUrl} />}
+              {/* when it landed — and, for her own lines, the moment he saw it */}
+              <div className={`mt-1 flex items-center gap-1.5 ${mine ? "pr-9" : "pl-9"}`}>
+                <Stamp at={m.time} className="text-white/30" />
+                {mine && <ReadTicks m={m} className="ml-1" />}
+              </div>
             </div>
           );
         })}
@@ -1114,7 +1128,8 @@ function HouseTab() {
         />
         <button
           onClick={() => {
-            saveDungeon(form);
+            /* discipline costs are edited live in their own card — never clobber them */
+            saveDungeon({ ...form, discipline: d.discipline });
             setSaved(true);
             setTimeout(() => setSaved(false), 1800);
           }}
@@ -1173,6 +1188,11 @@ function HouseTab() {
             + add rule
           </button>
         </div>
+      </div>
+
+      {/* ⚖️ what each kind of strike costs — hers to set */}
+      <div className="lg:col-span-2">
+        <DisciplineCosts />
       </div>
     </div>
   );

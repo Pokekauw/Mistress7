@@ -3,13 +3,18 @@ import {
   ACCESS_LOOK,
   attentionDebt,
   attentionDeadline,
+  attentionWindowHours,
   avatarFor,
   bgStyle,
   chatBgFor,
+  CHASTITY_ATTENTION_HOURS,
+  CHASTITY_DAMAGE_MULTIPLIER,
   clearChat,
   DEFAULT_ATTENTION_HOURS,
+  disciplineOf,
   fireCommand,
   has,
+  isLocked,
   setAccess,
   unlinkTelegram,
   setAttentionHours,
@@ -78,12 +83,16 @@ export default function SlaveDrawer({
     [msgs, slave.id]
   );
   const debt = attentionDebt(slave);
-  const hours = slave.attentionHours || DEFAULT_ATTENTION_HOURS;
+  /* the window that is actually running — six hours while he is locked */
+  const locked = isLocked(slave);
+  const hours = attentionWindowHours(slave);
+  const setHours = slave.attentionHours || DEFAULT_ATTENTION_HOURS;
   const debtLeft = attentionDeadline(slave) - Date.now();
+  const fine = disciplineOf(dungeon).attention * (locked ? CHASTITY_DAMAGE_MULTIPLIER : 1);
 
   /* local draft for the attention-window slider — commits on release */
-  const [draftHours, setDraftHours] = useState(hours);
-  useEffect(() => setDraftHours(hours), [hours]);
+  const [draftHours, setDraftHours] = useState(setHours);
+  useEffect(() => setDraftHours(setHours), [setHours]);
 
   const beat = (m: string, tone: "gold" | "red" = "gold") => {
     flash(m, tone);
@@ -124,7 +133,8 @@ export default function SlaveDrawer({
               />
             </div>
             <div className="mt-1 font-mono text-[9.5px] text-white/35">
-              Attention debt {debt}% · {hours}h window · due {timeLeft(Math.max(0, debtLeft)) || "now"}
+              Attention debt {debt}% · {hours}h window{locked ? " 🔒" : ""} · due{" "}
+              {timeLeft(Math.max(0, debtLeft)) || "now"}
             </div>
           </div>
           <button onClick={onClose} className="shrink-0 text-[20px] leading-none text-white/40 hover:text-white">
@@ -277,14 +287,22 @@ export default function SlaveDrawer({
                   <span className="label">⏳ Attention debt timer</span>
                   <span className="flex-1" />
                   <span className="font-mono text-[10px] text-white/45">
-                    {hours}h · due {timeLeft(Math.max(0, debtLeft)) || "now"}
+                    {hours}h{locked ? " 🔒" : ""} · due {timeLeft(Math.max(0, debtLeft)) || "now"}
                   </span>
                 </div>
                 <p className="mt-1.5 text-[11px] leading-relaxed text-white/45">
                   If he is completely silent — no chat, ritual, tribute, proof or check-in — for the whole window,{" "}
-                  <span className="text-rose-200/80">10 devotion is removed automatically</span> and the timer starts
-                  over. Looking at the app does not count.
+                  <span className="text-rose-200/80">{fine} devotion is removed automatically</span> and the timer
+                  starts over. Looking at the app does not count.
                 </p>
+
+                {locked && (
+                  <p className="mt-2 rounded-lg border border-violet-400/35 bg-violet-500/10 px-3 py-2 text-[11px] leading-relaxed text-violet-100/85">
+                    🔒 He is held in chastity: his window is capped at {CHASTITY_ATTENTION_HOURS} hours and every loss
+                    he takes is doubled ×{CHASTITY_DAMAGE_MULTIPLIER}. Your setting below applies again the moment the
+                    lock is lifted.
+                  </p>
+                )}
 
                 <div className="mt-3 grid grid-cols-4 gap-1.5">
                   {[6, 12, 24, 48].map((h) => (
@@ -296,7 +314,7 @@ export default function SlaveDrawer({
                         beat(`⏳ Attention timer set to ${h}h · ${slave.name}`);
                       }}
                       className={`rounded-md border py-2 text-[11px] transition ${
-                        hours === h
+                        setHours === h
                           ? "border-brass/60 bg-brass/15 text-brass-soft"
                           : "border-white/10 text-white/55 hover:border-brass/40"
                       }`}
@@ -315,13 +333,13 @@ export default function SlaveDrawer({
                     value={draftHours}
                     onChange={(e) => setDraftHours(Number(e.target.value))}
                     onPointerUp={() => {
-                      if (draftHours !== hours) {
+                      if (draftHours !== setHours) {
                         setAttentionHours(slave.id, draftHours);
                         beat(`⏳ Attention timer set to ${draftHours}h · ${slave.name}`);
                       }
                     }}
                     onKeyUp={() => {
-                      if (draftHours !== hours) {
+                      if (draftHours !== setHours) {
                         setAttentionHours(slave.id, draftHours);
                         beat(`⏳ Attention timer set to ${draftHours}h · ${slave.name}`);
                       }
