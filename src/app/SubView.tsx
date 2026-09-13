@@ -5,7 +5,6 @@ import ConnBadge from "../components/ConnBadge";
 import MediaBubble from "../components/MediaBubble";
 import ConditionTimer from "../components/ConditionTimer";
 import StatusBanner from "../components/StatusBanner";
-import CommandLog from "../components/CommandLog";
 import TelegramPanel from "../components/TelegramPanel";
 import TelegramInline from "../components/TelegramInline";
 import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
@@ -74,7 +73,6 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   const [localPreview, setLocalPreview] = useState<string | null>(null);
   const [origKb, setOrigKb] = useState(0);
   const [uploadErr, setUploadErr] = useState("");
-  const [showLog, setShowLog] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [holdPct, setHoldPct] = useState(0);
   const holdRef = useRef<number | null>(null);
@@ -698,21 +696,29 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
         {/* telegram — inline in the chat, where he will actually see it */}
         <TelegramInline slave={slave} />
 
-        {/* command log */}
-        <button
-          onClick={() => setShowLog((v) => !v)}
-          className="mt-2 flex w-full items-center gap-2 rounded-lg border border-white/10 px-3.5 py-2 text-[11.5px] text-white/50 transition hover:border-brass/35 hover:text-brass-soft"
-        >
-          <span>📜</span>
-          <span>Command Log</span>
-          <span className="flex-1" />
-          <span className={`transition-transform ${showLog ? "rotate-180" : ""}`}>⌄</span>
-        </button>
-        {showLog && (
-          <div className="mt-2">
-            <CommandLog messages={msgs} title="Orders & Outcomes" limit={30} />
-          </div>
-        )}
+        {/* composer — right under the chat so writing and reading stay together */}
+        <div className="mt-2 flex gap-2">
+          <input
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (!gagged) setTyping(slave.id, "sub", e.target.value.trim().length > 0);
+            }}
+            onBlur={() => setTyping(slave.id, "sub", false)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              send();
+              setTyping(slave.id, "sub", false);
+            }}
+            placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...`}
+            className={`flex-1 rounded-full border px-4 py-3 text-[15px] outline-none transition ${
+              gagged ? "border-amber-400/50 bg-amber-500/10 text-amber-100 placeholder:text-amber-200/60" : "border-white/12 bg-black/40 focus:border-brass/50"
+            }`}
+          />
+          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
+            Send
+          </button>
+        </div>
 
         {/* rituals — press as often as he likes; each button pays ♥ once a day */}
         <div className="thin-scroll mt-3 flex gap-2 overflow-x-auto pb-1">
@@ -783,30 +789,6 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
             className="shrink-0 rounded-full border border-brass/45 bg-brass/12 px-3.5 py-2 text-[12px] text-brass-soft"
           >
             💰 Tribute
-          </button>
-        </div>
-
-        {/* composer */}
-        <div className="mt-2 flex gap-2">
-          <input
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              if (!gagged) setTyping(slave.id, "sub", e.target.value.trim().length > 0);
-            }}
-            onBlur={() => setTyping(slave.id, "sub", false)}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              send();
-              setTyping(slave.id, "sub", false);
-            }}
-            placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...`}
-            className={`flex-1 rounded-full border px-4 py-3 text-[15px] outline-none transition ${
-              gagged ? "border-amber-400/50 bg-amber-500/10 text-amber-100 placeholder:text-amber-200/60" : "border-white/12 bg-black/40 focus:border-brass/50"
-            }`}
-          />
-          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
-            Send
           </button>
         </div>
 
