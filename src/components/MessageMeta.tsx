@@ -28,16 +28,25 @@ export function Stamp({
  * Read receipts for what YOU sent: one tick = sent, two = seen, with the
  * moment she opened it. Rendered under the bubble, never inside it.
  */
-export function ReadTicks({ m, className = "" }: { m: Msg; className?: string }) {
+export function ReadTicks({
+  m,
+  className = "",
+  compact = false,
+}: {
+  m: Msg;
+  className?: string;
+  /** inside an action box: the ticks alone, the words live in the tooltip */
+  compact?: boolean;
+}) {
   const seen = typeof m.readAt === "number" && m.readAt > 0;
   return (
     <span
       title={seen ? `Seen ${stampOf(m.readAt!)}` : "Sent"}
-      className={`font-mono text-[9.5px] tracking-[0.06em] whitespace-nowrap ${
+      className={`font-mono ${compact ? "text-[9px]" : "text-[9.5px]"} tracking-[0.06em] whitespace-nowrap ${
         seen ? "text-brass-soft/80" : "text-white/40"
       } ${className}`}
     >
-      {seen ? `✓✓ seen ${clockOf(m.readAt!)}` : "✓ sent"}
+      {compact ? (seen ? "✓✓" : "✓") : seen ? `✓✓ seen ${clockOf(m.readAt!)}` : "✓ sent"}
     </span>
   );
 }

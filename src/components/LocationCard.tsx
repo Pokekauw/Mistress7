@@ -1,4 +1,6 @@
-import { mapLinks, type Fix } from "../lib/store";
+import { useState } from "react";
+import { mapLinks, type Fix, type Msg } from "../lib/store";
+import ChatAction from "./ChatAction";
 
 function ago(t: number) {
   const s = Math.round((Date.now() - t) / 1000);
@@ -45,5 +47,50 @@ export default function LocationCard({ fix, compact = false }: { fix: Fix; compa
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The same pin, folded into one line of the thread. A map costs 130px of
+ * history every time it is drawn, so it stays shut until it is asked for.
+ */
+export function LocationAction({
+  m,
+  align = "start",
+  ticks = false,
+}: {
+  m: Msg;
+  align?: "start" | "end";
+  ticks?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const fix = m.fix!;
+  const late = (m.title || "").includes("Late");
+
+  return (
+    <ChatAction
+      m={m}
+      icon="📍"
+      title={m.title || "Location"}
+      tone={late ? "amber" : "emerald"}
+      body={fix.place || `${fix.lat.toFixed(4)}, ${fix.lng.toFixed(4)} · ±${Math.round(fix.acc)}m`}
+      align={align}
+      ticks={ticks}
+      wide={open}
+      chip={
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="rounded-full border border-emerald-300/35 bg-emerald-500/10 px-1.5 py-px font-mono text-[8.5px] tracking-[0.08em] text-emerald-100/85 uppercase transition hover:border-emerald-300/70"
+        >
+          {open ? "hide map" : "map"}
+        </button>
+      }
+    >
+      {open && (
+        <div className="mt-1.5">
+          <LocationCard fix={fix} compact />
+        </div>
+      )}
+    </ChatAction>
   );
 }

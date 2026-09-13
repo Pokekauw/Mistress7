@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Avatar, { AvatarPlate, SlaveAvatar } from "../components/Avatar";
-import LocationCard from "../components/LocationCard";
+import { LocationAction } from "../components/LocationCard";
+import ChatAction, { Chip, actionLook } from "../components/ChatAction";
 import ConnBadge from "../components/ConnBadge";
 import MediaBubble from "../components/MediaBubble";
 import ConditionTimer from "../components/ConditionTimer";
@@ -475,181 +476,141 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
               setAtBottom(near);
               if (near) setUnread(0);
             }}
-            className="thin-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3"
+            className="thin-scroll min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2.5"
             style={bgStyle(chatBgFor(slave, dungeon))}
           >
             {msgs.map((m) => {
             if (m.kind === "system" || m.kind === "refusal")
               return (
-                <div key={m.id} className="rounded-lg border-l-2 border-white/20 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white/55">
-                  <Linkify text={m.text} />
-                  <div className="mt-1">
-                    <Stamp at={m.time} className="text-white/25" />
-                  </div>
-                </div>
-              );
-            if (m.kind === "decree")
-              return (
-                <div
+                <ChatAction
                   key={m.id}
-                  className={`rounded-lg border px-3 py-2.5 text-center ${
-                    m.from === "mistress" ? "border-brass/35 bg-brass/8" : "border-white/10 bg-white/[0.03]"
-                  }`}
-                >
-                  {m.title && (
-                    <div
-                      className={`font-mono text-[9.5px] tracking-[0.16em] uppercase ${
-                        m.from === "mistress" ? "text-brass/80" : "text-white/40"
-                      }`}
-                    >
-                      {m.title}
-                      {m.repeat && m.repeat > 1 ? <span className="ml-1.5 text-white/45">×{m.repeat}</span> : ""}
-                    </div>
-                  )}
-                  <div
-                    className={`text-[13px] leading-snug italic ${m.title ? "mt-1" : ""} ${
-                      m.from === "mistress" ? "text-brass-soft/90" : "text-white/55"
-                    }`}
-                  >
-                    <Linkify text={m.text} />
-                  </div>
-                  {m.ritual && (
-                    <div
-                      className={`mt-1.5 inline-block rounded-full border px-2 py-0.5 font-mono text-[9px] tracking-[0.1em] uppercase ${
-                        m.ritual.earned
-                          ? "border-brass/40 bg-brass/12 text-brass-soft"
-                          : "border-white/12 text-white/40"
-                      }`}
-                    >
-                      {m.ritual.earned
-                        ? `♥ +${m.ritual.dev} devotion`
-                        : `♥ already earned today · pays again in ${timeLeft(
-                            ritualState(slave, m.ritual.id).resetsAt - Date.now()
-                          )}`}
-                    </div>
-                  )}
-                  <div className="mt-1.5 flex items-center justify-center gap-1.5">
-                    <Stamp at={m.time} className="text-white/30" />
-                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
-                  </div>
-                </div>
+                  m={m}
+                  icon={m.kind === "refusal" ? "⛔" : "⚙️"}
+                  tone={m.kind === "refusal" ? "rose" : "slate"}
+                  body={m.text}
+                />
               );
+            if (m.kind === "decree") {
+              const look = actionLook(m);
+              return (
+                <ChatAction
+                  key={m.id}
+                  m={m}
+                  icon={look.icon}
+                  title={m.title || "Decree"}
+                  tone={look.tone}
+                  body={m.text}
+                  align={m.from === "sub" ? "end" : "start"}
+                  ticks={m.from === "sub"}
+                  chip={
+                    m.ritual ? (
+                      <Chip tone={m.ritual.earned ? "emerald" : "slate"}>
+                        {m.ritual.earned
+                          ? `♥ +${m.ritual.dev}`
+                          : `♥ in ${timeLeft(ritualState(slave, m.ritual.id).resetsAt - Date.now())}`}
+                      </Chip>
+                    ) : null
+                  }
+                />
+              );
+            }
             if (m.kind === "tribute") {
               const offered = m.verdict === "pending";
               const rejected = m.verdict === "rejected";
               return (
-                <div
+                <ChatAction
                   key={m.id}
-                  className={`rounded-lg border px-3 py-2 text-center ${
-                    offered
-                      ? "border-amber-400/45 bg-amber-500/10"
-                      : rejected
-                        ? "border-rose-400/40 bg-rose-500/8"
-                        : "border-brass/35 bg-brass/10"
-                  }`}
-                >
-                  <div className="label">{offered ? "Tribute offered" : rejected ? "Tribute declined" : "Recorded"}</div>
-                  <div
-                    className={`font-display text-[1.2rem] ${
-                      offered ? "text-amber-200" : rejected ? "text-rose-200/80" : "text-brass-soft"
-                    }`}
-                  >
-                    {money(m.amount || 0)}
-                  </div>
-                  {offered && <div className="mt-0.5 text-[10.5px] text-amber-100/70">awaiting her judgement ⏳</div>}
-                  {rejected && <div className="mt-0.5 text-[10.5px] text-rose-100/65">not recorded</div>}
-                  <div className="mt-1 flex items-center justify-center gap-1.5">
-                    <Stamp at={m.time} className="text-white/30" />
-                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
-                  </div>
-                </div>
+                  m={m}
+                  icon="💰"
+                  title={offered ? "Tribute offered" : rejected ? "Tribute declined" : "Recorded"}
+                  tone={offered ? "amber" : rejected ? "rose" : "brass"}
+                  value={
+                    <span
+                      className={`font-display text-[13.5px] leading-none ${
+                        offered ? "text-amber-100" : rejected ? "text-rose-200/80" : "text-brass-soft"
+                      }`}
+                    >
+                      {money(m.amount || 0)}
+                    </span>
+                  }
+                  chip={
+                    offered ? <Chip tone="amber">awaiting her ⏳</Chip> : rejected ? <Chip tone="rose">not recorded</Chip> : null
+                  }
+                  align="end"
+                  ticks={m.from === "sub"}
+                />
               );
             }
             if (m.kind === "demand")
               return (
-                <div key={m.id} className="text-center text-[11.5px] text-white/40">
-                  💰 tribute demanded {money(m.amount || 0)} · {m.status}
-                  <div className="mt-0.5">
-                    <Stamp at={m.time} className="text-white/25" />
-                  </div>
-                </div>
+                <ChatAction
+                  key={m.id}
+                  m={m}
+                  icon="💰"
+                  title="Tribute demanded"
+                  tone={m.status === "paid" ? "emerald" : m.status === "declined" ? "rose" : "brass"}
+                  value={<span className="font-display text-[13.5px] leading-none text-brass-soft">{money(m.amount || 0)}</span>}
+                  chip={
+                    <Chip tone={m.status === "paid" ? "emerald" : m.status === "declined" ? "rose" : "brass"}>
+                      {m.status}
+                    </Chip>
+                  }
+                />
               );
             if (m.kind === "locreq")
               return (
-                <div
+                <ChatAction
                   key={m.id}
-                  className={`rounded-lg border px-3 py-2.5 text-center text-[12.5px] ${
-                    m.locState === "fulfilled"
-                      ? "border-emerald-400/30 bg-emerald-500/8 text-emerald-100/85"
-                      : m.locState === "expired"
-                        ? "border-rose-400/40 bg-rose-500/8 text-rose-100/85"
-                        : "border-amber-400/35 bg-amber-500/8 text-amber-100/85"
-                  }`}
-                >
-                  <div className="italic">
-                    📍 {dungeon.honorific} {m.text}
-                  </div>
-                  <div className="mt-1 font-mono text-[10px] tracking-wider uppercase opacity-70">
-                    {m.locState === "fulfilled"
-                      ? "you complied ✅"
-                      : m.locState === "expired"
-                        ? "you failed — penalised ⛓️"
-                        : `${timeLeft((m.deadline || 0) - Date.now())} left ⏳`}
-                  </div>
-                  <div className="mt-1">
-                    <Stamp at={m.time} className="text-white/35" />
-                  </div>
-                </div>
+                  m={m}
+                  icon="📍"
+                  title="Check-in demanded"
+                  tone={m.locState === "fulfilled" ? "emerald" : m.locState === "expired" ? "rose" : "oxblood"}
+                  body={`${dungeon.honorific} ${m.text}`}
+                  chip={
+                    <Chip tone={m.locState === "fulfilled" ? "emerald" : m.locState === "expired" ? "rose" : "oxblood"}>
+                      {m.locState === "fulfilled"
+                        ? "complied ✅"
+                        : m.locState === "expired"
+                          ? "penalised ⛓️"
+                          : `${timeLeft((m.deadline || 0) - Date.now())} left ⏳`}
+                    </Chip>
+                  }
+                />
               );
             if (m.kind === "location" && m.fix)
-              return (
-                <div key={m.id} className="flex flex-col items-end">
-                  <div className="w-full max-w-[85%]">
-                    <LocationCard fix={m.fix} compact />
-                  </div>
-                  <div className="mt-1 flex items-center gap-1.5 pr-1">
-                    <Stamp at={m.time} className="text-white/30" />
-                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
-                  </div>
-                </div>
-              );
+              return <LocationAction key={m.id} m={m} align="end" ticks={m.from === "sub"} />;
             if (m.kind === "media") return <MediaBubble key={m.id} m={m} slaveId={slave.id} side="left" />;
             if (m.kind === "proof")
               return (
-                <div key={m.id} className="rounded-xl border border-violet-400/30 bg-violet-500/8 p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="label !text-violet-200/75">📸 Your proof</span>
-                    <span className="flex-1" />
-                    <span
-                      className={`font-mono text-[10px] uppercase ${
-                        m.verdict === "accepted" ? "text-emerald-300" : m.verdict === "rejected" ? "text-rose-300" : "text-amber-300"
-                      }`}
-                    >
+                <ChatAction
+                  key={m.id}
+                  m={m}
+                  icon="📸"
+                  title="Your proof"
+                  tone={m.verdict === "accepted" ? "emerald" : m.verdict === "rejected" ? "rose" : "violet"}
+                  body={m.text}
+                  chip={
+                    <Chip tone={m.verdict === "accepted" ? "emerald" : m.verdict === "rejected" ? "rose" : "amber"}>
                       {m.verdict === "pending" ? "awaiting judgement" : m.verdict}
-                    </span>
-                  </div>
+                    </Chip>
+                  }
+                  align="end"
+                  ticks={m.from === "sub"}
+                  wide
+                >
                   {m.file?.url ? (
                     <img
                       src={m.file.url}
                       alt="proof"
                       loading="lazy"
-                      className="mt-2 max-h-56 w-full rounded-lg border border-white/10 object-cover"
+                      className="mt-1.5 max-h-36 w-full rounded border border-white/10 object-cover"
                     />
                   ) : (
-                    <div className="mt-2 rounded-lg border border-white/10 bg-black/30 px-3 py-3 text-[12px] text-white/55">
+                    <div className="mt-1.5 rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[11px] text-white/50">
                       📎 {m.file?.name || "file"} · {Math.round((m.file?.size || 0) / 1024)} KB
                     </div>
                   )}
-                  {m.text && (
-                    <p className="mt-2 text-[12.5px] text-white/70">
-                      <Linkify text={m.text} />
-                    </p>
-                  )}
-                  <div className="mt-1.5 flex items-center gap-1.5">
-                    <Stamp at={m.time} className="text-white/30" />
-                    {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
-                  </div>
-                </div>
+                </ChatAction>
               );
             const mine = m.from === "sub";
             return (
