@@ -3,8 +3,8 @@ import { isUploadFail, uploadImage } from "../lib/storage";
 
 /**
  * Minimal portrait/backdrop picker: paste a URL or upload a file.
- * Uploads are downscaled in the browser and stored inline, so this
- * works identically with or without Firebase Storage.
+ * Uploads are downscaled in the browser and stored inline in Firestore as
+ * a data: URL — the same path everywhere, with no Storage involved.
  */
 export default function ImagePicker({
   value,
@@ -31,9 +31,11 @@ export default function ImagePicker({
     setBusy(true);
     setErr("");
     try {
+      /* backdrops live in the house document permanently, so they are held
+         to a tighter budget than chat media */
       const r = await uploadImage(f, round ? "avatars" : "backdrops", {
         max: round ? 512 : 1600,
-        targetBytes: round ? 120_000 : 400_000,
+        targetBytes: round ? 120_000 : 160_000,
       });
       if (isUploadFail(r)) setErr(r.error);
       else onChange(r.url);

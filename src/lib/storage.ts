@@ -1,36 +1,52 @@
-import { deleteObject, getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { HOUSE_ID, isFirebase, storage, STORAGE_BUCKET_NAME } from "../firebase";
+/* ==================================================================== *
+ *  MEDIA  —  every image is stored INLINE, as a data: URL in Firestore
+ *
+ *  Firebase Storage is no longer used by this app. It needs a paid (Blaze)
+ *  project and its CORS preflight fails from a single-file static build,
+ *  so it is gone entirely:
+ *
+ *    • this module does NOT import "firebase/storage"
+ *    • firebase.ts never calls getStorage(), so no Storage instance exists
+ *    • there is no bucket, no uploadBytes(), no getDownloadURL(), no
+ *      deleteObject() — nothing in the bundle can reach
+ *      firebasestorage.googleapis.com, so no 403/CORS/quota error from
+ *      Storage can ever reach the user
+ *
+ *  The pipeline for every image in the app is now:
+ *
+ *    1. compress in the browser (downscale, then step quality down)
+ *    2. read the result as a data: URL
+ *    3. store that string on the message — Firestore IS the storage
+ *
+ *  The only hard limit left is Firestore's 1 MiB document cap. Every
+ *  number below is derived from it, so the ceiling and the compressor can
+ *  no longer disagree — which is exactly what used to make an upload fail
+ *  with "too large" *after* compression had already succeeded.
+ * ==================================================================== */
 
-export const isRemote = isFirebase;
-export const MEDIA_BUCKET = "dominion-media";
+/** Firestore refuses any document larger than 1 MiB. This is the wall. */
+export const FIRESTORE_DOC_LIMIT = 1_048_576;
 
-/** Firestore documents cap at 1 MiB; base64 inflates ~33%, so stay well under. */
-export const INLINE_CEILING = 320_000;
-
-/* ------------------------------------------------------------------ *
- *  bucket sanity                                                      *
- * ------------------------------------------------------------------ */
+/** longest `data:` header we can emit ("data:image/jpeg;base64,") plus slack */
+const DATA_URL_HEADER = 32;
 
 /**
- * The bucket the SDK instance will actually address. Empty means every
- * request would be built as `/v0/b//o/…`, which can only fail — so it is
- * checked before an upload is attempted, never after.
+ * How much of a Firestore document ONE inline attachment may occupy, measured
+ * as the length of the string that is actually written. 260 000 characters
+ * leaves the house document room for the roster, the ledger and the newest
+ * few images at once, while still holding a 1600 px photo at a quality worth
+ * looking at.
  */
-export function storageBucket(): string {
-  if (!storage) return "";
-  try {
-    /* `ref(...).bucket` is the public read-back of the bucket this instance
-       will address; the instance itself keeps it in a private field. */
-    return ref(storage, "_health").bucket || STORAGE_BUCKET_NAME || "";
-  } catch {
-    return STORAGE_BUCKET_NAME || "";
-  }
-}
+export const INLINE_STRING_BUDGET = 260_000;
 
-/** true only when a real bucket is behind the Storage instance */
-export function storageUsable(): boolean {
-  return Boolean(isFirebase && storage && storageBucket());
-}
+/**
+ * The same budget expressed in raw image bytes — i.e. precisely what the
+ * compressor is told to hit. base64 turns 3 bytes into 4 characters, so the
+ * two are locked together by construction: anything that satisfies
+ * compression also fits Firestore, and anything Firestore can hold can be
+ * produced. There is no window left for a "too large" failure.
+ */
+export const INLINE_CEILING = Math.floor(((INLINE_STRING_BUDGET - DATA_URL_HEADER) * 3) / 4);
 
 /* ------------------------------------------------------------------ *
  *  compression                                                        *
@@ -57,14 +73,32 @@ function canvasToBlob(c: HTMLCanvasElement, q: number): Promise<Blob | null> {
 }
 
 /**
- * Downscale and compress in the browser, stepping quality down until the
- * result fits `targetBytes`. A 1.4 MB photo typically lands under 200 KB.
+ * Callers may ask for a SMALLER image than the default (avatars do). Nobody
+ * may ask for a bigger one than Firestore can hold — the request is clamped
+ * here rather than trusted, so a careless call site cannot reintroduce the
+ * mismatch that produced the old "too large" errors.
+ */
+function resolveTarget(targetBytes?: number): number {
+  if (!targetBytes || targetBytes <= 0) return INLINE_CEILING;
+  return Math.min(targetBytes, INLINE_CEILING);
+}
+
+/**
+ * Downscale and compress in the browser, stepping quality down — then the
+ * canvas — until the result fits `targetBytes` (never more than
+ * INLINE_CEILING).
+ *
+ * The loop has no iteration cap. It stops when the image fits; at 96 px and
+ * quality 0.3 a JPEG is a couple of KB, so "still too big" is not a state a
+ * real photograph can end in. That guarantee is what makes inline storage
+ * safe: the caller never has to second-guess the size.
  */
 export async function compressImage(
   file: File | Blob,
   opts: { max?: number; quality?: number; targetBytes?: number } = {}
 ): Promise<Blob | null> {
-  const { max = 1600, quality = 0.82, targetBytes = 500_000 } = opts;
+  const { max = 1600, quality = 0.82 } = opts;
+  const target = resolveTarget(opts.targetBytes);
   if (!file.type.startsWith("image/")) return null;
 
   const img = await loadImage(file);
@@ -72,6 +106,7 @@ export async function compressImage(
 
   let w = img.naturalWidth || img.width;
   let h = img.naturalHeight || img.height;
+  if (!w || !h) return null;
   if (Math.max(w, h) > max) {
     const r = max / Math.max(w, h);
     w = Math.round(w * r);
@@ -85,31 +120,29 @@ export async function compressImage(
   if (!ctx) return null;
   ctx.drawImage(img, 0, 0, w, h);
 
-  let q = quality;
+  let q = Math.min(quality, 0.92);
   let out = await canvasToBlob(c, q);
+  let best = out;
 
-  /* step quality down, then dimensions, until it fits */
-  let guard = 0;
-  while (out && out.size > targetBytes && guard < 6) {
-    guard += 1;
-    if (q > 0.45) {
-      q -= 0.12;
+  /* quality first (cheap, keeps resolution), then the canvas itself */
+  while (out && out.size > target && (q > 0.3 || Math.max(w, h) > 96)) {
+    if (q > 0.3) {
+      q = Math.max(0.3, q - 0.1);
     } else {
-      w = Math.round(w * 0.75);
-      h = Math.round(h * 0.75);
+      w = Math.max(96, Math.round(w * 0.8));
+      h = Math.max(96, Math.round(h * 0.8));
       c.width = w;
       c.height = h;
       c.getContext("2d")?.drawImage(img, 0, 0, w, h);
     }
     out = await canvasToBlob(c, q);
+    if (out && (!best || out.size < best.size)) best = out;
   }
 
-  return out;
+  /* if the last encode returned nothing at all, hand back the smallest one
+     that did — a slightly oversized image beats no image */
+  return out || best;
 }
-
-/** kept for callers that still expect the old name */
-export const shrinkImage = (file: File | Blob, max = 1400, q = 0.82) =>
-  compressImage(file, { max, quality: q });
 
 export function toDataUrl(blob: Blob): Promise<string> {
   return new Promise((res, rej) => {
@@ -138,13 +171,15 @@ export async function makeBlurPreview(file: File): Promise<string | null> {
 }
 
 /* ------------------------------------------------------------------ *
- *  upload                                                             *
+ *  the one upload path                                                *
  * ------------------------------------------------------------------ */
 
 export type Uploaded = {
-  /** always a short string: a Storage download URL, or a small data URL */
+  /** a `data:` URL — the image itself, ready to drop straight into <img src> */
   url: string;
+  /** always null: there are no Storage objects left to address */
   path: string | null;
+  /** always true: everything is inline now */
   inline: boolean;
   bytes: number;
 };
@@ -159,105 +194,64 @@ export { isFail as isUploadFail };
 /**
  * The single upload path for every image in the app.
  *
- * 1. compress in the browser
- * 2. `uploadBytes(ref(storage, path), file)` — bytes straight to Storage
- * 3. `getDownloadURL(ref)` — and ONLY that short URL is handed back
+ * 1. compress in the browser, aiming at INLINE_CEILING
+ * 2. read the result as a data: URL
+ * 3. hand that string back — it goes into Firestore as it is
  *
- * Nothing large is ever written into a Firestore document, which is what
- * used to make ~1.4 MB photos fail against the 1 MiB document limit.
+ * No network is involved, so there is nothing to fail with a Storage error.
+ * The only way this returns an error is a file the browser cannot decode, or
+ * something that is not an image and is bigger than the inline budget.
+ *
+ * `_folder` is kept in the signature so call sites still say what the image
+ * is for ("proof", "backdrops", …); there are no Storage paths left to build
+ * from it.
  */
 export async function uploadImage(
   file: File,
-  folder: "proof" | "media" | "avatars" | "backdrops" = "media",
-  opts: { max?: number; targetBytes?: number } = {}
+  _folder: "proof" | "media" | "avatars" | "backdrops" = "media",
+  opts: { max?: number; quality?: number; targetBytes?: number } = {}
 ): Promise<Uploaded | UploadFail> {
   const isImage = file.type.startsWith("image/");
   const compressed = isImage ? await compressImage(file, opts) : null;
   const payload: Blob = compressed || file;
 
-  /* ---- remote: Firebase Storage ---- */
-  if (isFirebase && storage) {
-    if (!storageUsable()) {
-      console.error(
-        `[dominion] Storage is initialised without a bucket — refusing to upload to /v0/b//o/. ` +
-          `Expected "${STORAGE_BUCKET_NAME}"; set VITE_FIREBASE_STORAGE_BUCKET and redeploy.`
-      );
-    } else {
-      try {
-        const ext = isImage ? "jpg" : (file.name.split(".").pop() || "bin").toLowerCase().slice(0, 5);
-        const path = `${MEDIA_BUCKET}/${HOUSE_ID}/${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  /* Images are compressed TO the ceiling, so this only trips for a file the
+     browser could not decode, or one that is not an image at all. */
+  if (payload.size > INLINE_CEILING) return { error: tooLargeMessage(file, payload, isImage) };
 
-        /* 2 — upload the bytes. ref() is resolved against the explicit bucket. */
-        const r = ref(storage, path);
-        await uploadBytes(r, payload, {
-          contentType: isImage ? "image/jpeg" : file.type || "application/octet-stream",
-          cacheControl: "public,max-age=31536000",
-        });
-
-        /* 3 — ask Storage for the public URL of what we just wrote */
-        const url = await getDownloadURL(r);
-
-        if (!url || !/^https?:\/\//i.test(url)) {
-          console.error(`[dominion] getDownloadURL returned "${url}" for ${path}`);
-          return { error: "The upload landed but Storage returned no usable URL. Try again." };
-        }
-
-        return { url, path, inline: false, bytes: payload.size };
-      } catch (e) {
-        const code = (e as { code?: string })?.code || "";
-        console.warn(`[dominion] storage upload failed (${code || "unknown"}) · bucket ${storageBucket()}`, e);
-
-        /* fall through to inline only if it is small enough to be safe */
-        if (payload.size > INLINE_CEILING) {
-          return { error: explainUploadError(code) };
-        }
-      }
-    }
-  }
-
-  /* local mode, or a small file after a storage failure */
-  if (payload.size > INLINE_CEILING) {
-    return { error: "That image is too large for local mode. Configure Firebase Storage to send full-size photos." };
-  }
   try {
     return { url: await toDataUrl(payload), path: null, inline: true, bytes: payload.size };
   } catch {
-    return { error: "That file could not be read." };
+    return { error: "That file could not be read. Try another image." };
   }
 }
 
 /**
- * Storage error codes are cryptic and a rules rejection looks identical to a
- * network failure from the UI. Say which one it was, and what to do.
+ * The only size error left in the app, and it names the real limit — a
+ * Firestore document — instead of a Storage bucket that no longer exists.
  */
-function explainUploadError(code: string): string {
-  if (code.includes("unauthorized") || code.includes("permission-denied"))
-    return "Storage rejected the upload (403). Publish storage.rules — see SETUP.md §1.";
-  if (code.includes("quota-exceeded"))
-    return "Storage quota is full. Free space or upgrade the bucket's plan.";
-  if (code.includes("unauthenticated"))
-    return "Storage needs a signed-in user before it accepts this upload. Check storage.rules.";
-  if (code.includes("retry-limit-exceeded") || code.includes("network") || code.includes("unavailable"))
-    return "The upload could not reach Firebase Storage. Check the connection and try again.";
-  if (code.includes("invalid-") || code.includes("cannot-slice-blob"))
-    return "That file could not be uploaded in this format. Try another image.";
-  return "Upload failed and the file is too large to store inline.";
+function tooLargeMessage(file: File, payload: Blob, isImage: boolean): string {
+  const maxKb = Math.round(INLINE_CEILING / 1024);
+  if (isImage)
+    return "That image could not be compressed enough to store. Try another photo. 🖤";
+  const mb = (payload.size / (1024 * 1024)).toFixed(1);
+  return (
+    `${file.name || "That file"} is ${mb} MB. Photos are compressed to fit, but ` +
+    `${file.type || "this file type"} is stored exactly as it is — and the database holds ` +
+    `${maxKb} KB per attachment. Send it as a photo instead.`
+  );
 }
 
-/** legacy shim used by MediaComposer */
-export async function uploadMedia(file: File): Promise<Uploaded | null> {
-  const r = await uploadImage(file, "media");
-  return isFail(r) ? null : r;
-}
+/* ------------------------------------------------------------------ *
+ *  reading attachments back                                           *
+ * ------------------------------------------------------------------ */
 
-export async function deleteMedia(path: string | null) {
-  if (!path || !storageUsable() || !storage) return;
-  try {
-    await deleteObject(ref(storage, path));
-  } catch {
-    /* ignore */
-  }
-}
+/** an inline attachment: the bytes themselves, base64, in the document */
+export const isDataUrl = (u?: string | null): boolean => Boolean(u && u.startsWith("data:"));
 
-/** true for a Storage/remote URL — never for an inline `data:` URL */
+/**
+ * A legacy remote URL, written while Firebase Storage was still in use.
+ * Nothing produces these any more; they are only recognised so documents
+ * written before the switch keep rendering.
+ */
 export const isRemoteUrl = (u?: string | null): boolean => Boolean(u && /^https?:\/\//i.test(u));

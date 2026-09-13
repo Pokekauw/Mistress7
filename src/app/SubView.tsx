@@ -616,7 +616,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
               );
             if (m.kind === "media") return <MediaBubble key={m.id} m={m} slaveId={slave.id} side="left" />;
             if (m.kind === "proof") {
-              /* msg.imageUrl first — the Storage URL — then the nested file.url */
+              /* msg.imageUrl first — the inline data: URL — then the nested file.url */
               const proofUrl = attachmentUrl(m);
               return (
                 <div key={m.id} className="rounded-xl border border-violet-400/30 bg-violet-500/8 p-3">
@@ -897,7 +897,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 backdrop-blur-sm">
                       <div className="h-8 w-8 animate-spin rounded-full border-2 border-brass/25 border-t-brass" />
                       <span className="font-mono text-[10px] tracking-[0.2em] text-brass-soft/80 uppercase">
-                        Compressing &amp; uploading
+                        Compressing…
                       </span>
                     </div>
                   )}
@@ -906,8 +906,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                 <div className="flex items-center gap-2 border-t border-white/8 px-3 py-2">
                   {proofFile ? (
                     <span className="flex-1 truncate font-mono text-[10.5px] text-emerald-300/80">
-                      ✓ {origKb} KB → {Math.round(proofFile.size / 1024)} KB
-                      {proofFile.path ? " · stored" : " · inline"}
+                      ✓ {origKb} KB → {Math.round(proofFile.size / 1024)} KB · stored inline
                     </span>
                   ) : (
                     <span className="flex-1 truncate font-mono text-[10.5px] text-white/40">{origKb} KB</span>

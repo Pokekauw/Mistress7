@@ -5,7 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_API_KEY?: string;
   readonly VITE_FIREBASE_AUTH_DOMAIN?: string;
   readonly VITE_FIREBASE_PROJECT_ID?: string;
-  readonly VITE_FIREBASE_STORAGE_BUCKET?: string;
+  /* no storage bucket: images are stored inline in Firestore, so
+     VITE_FIREBASE_STORAGE_BUCKET was removed along with Firebase Storage */
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
   readonly VITE_FIREBASE_APP_ID?: string;
   readonly VITE_FIREBASE_MEASUREMENT_ID?: string;

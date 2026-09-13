@@ -9,7 +9,7 @@ import {
 } from "firebase/firestore";
 import { db, HOUSE_ID, isFirebase } from "../firebase";
 import { WRITER_ID, type Msg, type Slave, type State } from "./store";
-import { isRemoteUrl } from "./storage";
+import { INLINE_STRING_BUDGET, isDataUrl } from "./storage";
 
 /* ------------------------------------------------------------------ */
 /*  paths                                                              */
@@ -30,18 +30,36 @@ function clean<T>(v: T): T {
 }
 
 /**
- * The first genuine Firebase Storage URL on a message.
+ * The attachment on a message, as one string.
+ *
+ * Everything is inline now, so this is normally a `data:` URL — the image
+ * bytes themselves. Documents written while Firebase Storage was still in
+ * use hold an `https://firebasestorage.googleapis.com/…` URL instead, and
+ * those are returned unchanged so old messages keep rendering.
  *
  * `imageUrl` is written by the upload flow; `media.url` / `file.url` are the
- * older nested fields, kept as fallbacks for documents written before it.
- * Inline `data:` URLs are deliberately excluded — they are the thing that
- * used to push the house document past Firestore's 1 MiB cap.
+ * older nested fields, kept only as fallbacks.
  */
 function attachmentUrlOf(m: Msg): string | null {
   for (const u of [m.imageUrl, m.media?.url, m.file?.url]) {
-    if (isRemoteUrl(u)) return u as string;
+    if (typeof u === "string" && u.length > 0) return u;
   }
   return null;
+}
+
+/**
+ * Same, with a guard: a message written before this change could carry a
+ * payload far larger than the budget, and one oversized document would fail
+ * the entire mirrored batch. Dropping just that attachment is cheaper.
+ */
+function attachmentForMirror(m: Msg): string | null {
+  const url = attachmentUrlOf(m);
+  if (!url) return null;
+  if (isDataUrl(url) && url.length > INLINE_STRING_BUDGET) {
+    console.warn(`[dominion] attachment on ${m.id} is ${url.length} chars — too large to mirror, skipped`);
+    return null;
+  }
+  return url;
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,40 +133,68 @@ export function watchHouse(onRemote: (s: State) => void, onStatus: (ok: boolean)
 /** Firestore hard-caps documents at 1 MiB. Keep a safety margin. */
 const DOC_CEILING = 800_000;
 
+/** a message document batch may carry — inline payloads make batches heavy */
+const BATCH_OPS = 400;
+const BATCH_BYTES = 6_000_000;
+
+const approx = (v: unknown) => {
+  try {
+    return JSON.stringify(v)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+};
+
+const isHeavy = (u?: string | null) => Boolean(u && u.startsWith("data:") && u.length > 40_000);
+
 /**
- * Strip anything bulky that should have gone to Storage. Without this a
- * single oversized inline image silently kills every subsequent write to
- * the house document.
+ * Everything is stored inline now, so the house document is the one thing
+ * that can grow past Firestore's 1 MiB cap — and one oversized write kills
+ * *every* write that follows it, which is why this runs on every push.
+ *
+ * When it is over budget the OLDEST inline images are dropped first: they
+ * are already on every device that has been online, the newest one is the
+ * image she is looking at right now, and every message keeps its own copy
+ * in `houses/{id}/decrees/{msgId}` regardless. Only if that is not enough
+ * does it start dropping whole messages.
+ *
+ * Exported (not just used by pushHouse) so the trim can be checked against
+ * a synthetic state without needing a Firestore write.
  */
-function slimForFirestore(s: State): State {
-  const approx = (v: unknown) => {
-    try {
-      return JSON.stringify(v)?.length ?? 0;
-    } catch {
-      return 0;
-    }
-  };
-  if (approx(s) < DOC_CEILING) return s;
+export function slimForFirestore(s: State): State {
+  let size = approx(s);
+  if (size <= DOC_CEILING) return s;
 
-  const isHeavy = (u?: string | null) => Boolean(u && u.startsWith("data:") && u.length > 40_000);
+  const messages = s.messages.slice();
+  let dropped = 0;
 
-  let trimmed: State = {
-    ...s,
-    messages: s.messages.map((m) => {
-      const next = { ...m };
-      if (isHeavy(next.file?.url)) next.file = { ...next.file!, url: null };
-      if (next.media && isHeavy(next.media.url)) next.media = { ...next.media, url: "" };
-      /* imageUrl mirrors the same bytes — it has to go too, or the trim is moot */
-      if (isHeavy(next.imageUrl)) next.imageUrl = null;
-      return next;
-    }),
-  };
+  for (let i = 0; i < messages.length && size > DOC_CEILING; i++) {
+    const m = messages[i];
+    /* the same payload can sit in two fields; count everything that leaves */
+    const payloads = [m.imageUrl, m.media?.url, m.file?.url].filter((u) => isHeavy(u));
+    if (!payloads.length) continue;
 
-  /* still too big? drop the oldest messages — history is mirrored anyway */
+    const next = { ...m };
+    if (isHeavy(next.file?.url)) next.file = { ...next.file!, url: null };
+    if (next.media && isHeavy(next.media.url)) next.media = { ...next.media, url: "" };
+    if (isHeavy(next.imageUrl)) next.imageUrl = null;
+    messages[i] = next;
+
+    size -= payloads.reduce((n, p) => n + (p?.length ?? 0), 0);
+    dropped += 1;
+  }
+
+  let trimmed: State = dropped ? { ...s, messages } : s;
+
+  /* still too big? drop the oldest messages — the decrees mirror has them */
   while (approx(trimmed) > DOC_CEILING && trimmed.messages.length > 40) {
     trimmed = { ...trimmed, messages: trimmed.messages.slice(-Math.floor(trimmed.messages.length * 0.7)) };
   }
-  console.warn("[dominion] house document trimmed to fit Firestore's 1 MiB limit");
+
+  console.warn(
+    "[dominion] house document trimmed to fit Firestore's 1 MiB limit" +
+      (dropped ? ` — ${dropped} inline image${dropped === 1 ? "" : "s"} left out of the sync document` : "")
+  );
   return trimmed;
 }
 
@@ -188,20 +234,26 @@ export function primeMirror(s: State) {
 
 /**
  * Mirror the document into normalised collections so the roster,
- * punishment log and keys stay independently queryable in the console.
+ * punishment log and keys stay independently queryable in the console —
+ * and so every attachment has a document of its own.
+ *
+ * That last part matters now that images are inline: the house document
+ * holds the newest images only (see slimForFirestore), while each message
+ * keeps its full `data:` URL here, where the whole 1 MiB belongs to it.
  */
 export async function mirrorCollections(s: State) {
   if (!isFirebase || !db) return;
   try {
-    const batch = writeBatch(db);
-    let ops = 0;
-    const bump = () => (ops += 1);
+    type Pending = { ref: ReturnType<typeof doc>; data: Record<string, unknown>; merge: boolean };
+    const pending: Pending[] = [];
+    const add = (ref: ReturnType<typeof doc>, data: Record<string, unknown>, merge = false) =>
+      pending.push({ ref, data: clean(data), merge });
 
     /* roster */
     s.slaves.forEach((x: Slave) => {
-      batch.set(
+      add(
         doc(sub("slaves"), x.id),
-        clean({
+        {
           id: x.id,
           name: x.name,
           tier: x.tier,
@@ -235,27 +287,21 @@ export async function mirrorCollections(s: State) {
           spendCap: x.spendCap,
           lastFix: x.lastFix || null,
           updatedAt: serverTimestamp(),
-        }),
-        { merge: true }
+        },
+        true
       );
-      bump();
 
       /* punishment log */
       (x.log || []).forEach((l) => {
         if (mirrored.logs.has(l.id)) return;
         mirrored.logs.add(l.id);
-        batch.set(
-          doc(sub("punishments"), l.id),
-          clean({ ...l, slaveId: x.id, slaveName: x.name, createdAt: serverTimestamp() })
-        );
-        bump();
+        add(doc(sub("punishments"), l.id), { ...l, slaveId: x.id, slaveName: x.name, createdAt: serverTimestamp() });
       });
     });
 
     /* invitations */
     s.invites.forEach((i) => {
-      batch.set(doc(sub("invites"), i.key), clean({ ...i, updatedAt: serverTimestamp() }), { merge: true });
-      bump();
+      add(doc(sub("invites"), i.key), { ...i, updatedAt: serverTimestamp() }, true);
     });
 
 
@@ -271,37 +317,49 @@ export async function mirrorCollections(s: State) {
       if (mirrored.msgs.has(m.id) && !mutable) return;
       mirrored.msgs.add(m.id);
 
-      /* keep inline base64 out of Firestore's 1 MiB document limit */
+      /* The attachment is written ONCE, into imageUrl. `file` and `media`
+         carry the same base64 payload, so copying them across as well would
+         spend this document's 1 MiB three times over. */
       const { file, media, ...rest } = m;
-      batch.set(
+      add(
         doc(sub("decrees"), m.id),
-        clean({
+        {
           ...rest,
-          /**
-           * THE attachment field on the message document: exactly the URL
-           * getDownloadURL() returned after uploadBytes(). Written last so it
-           * wins over whatever `rest` carried, and never a data: URL.
-           */
-          imageUrl: attachmentUrlOf(m),
+          /** the inline data: URL — the image itself, stored in the database */
+          imageUrl: attachmentForMirror(m),
           hasFile: Boolean(file),
           fileName: file?.name ?? null,
-          fileUrl: isRemoteUrl(file?.url) ? file!.url : null,
-          /* kept so anything already reading the old name still works */
-          mediaUrl: isRemoteUrl(media?.url) ? media!.url : null,
+          fileMime: file?.mime ?? media?.mime ?? null,
           mediaLock: media?.lock ?? null,
           mediaUnlocked: media?.unlocked ?? null,
-        }),
-        { merge: true }
+        },
+        true
       );
-      bump();
 
       if (m.kind === "location" && m.fix) {
-        batch.set(doc(sub("locations"), m.id), clean({ slaveId: m.slaveId, ...m.fix }), { merge: true });
-        bump();
+        add(doc(sub("locations"), m.id), { slaveId: m.slaveId, ...m.fix }, true);
       }
     });
 
-    if (ops > 0) await batch.commit();
+    /* Commit in chunks. Inline base64 makes a batch orders of magnitude
+       heavier than it used to be, and a single Write request is capped well
+       below what 400 media documents would add up to — so a batch is closed
+       on whichever limit comes first. */
+    for (let i = 0; i < pending.length; ) {
+      const batch = writeBatch(db);
+      let ops = 0;
+      let bytes = 0;
+      while (i < pending.length && ops < BATCH_OPS && bytes < BATCH_BYTES) {
+        const w = pending[i++];
+        /* the SDK's two set() overloads are distinct — an explicit
+           `undefined` matches neither, so branch instead */
+        if (w.merge) batch.set(w.ref, w.data, { merge: true });
+        else batch.set(w.ref, w.data);
+        ops += 1;
+        bytes += approx(w.data);
+      }
+      await batch.commit();
+    }
   } catch (e) {
     console.warn("[dominion] mirror failed", e);
   }
