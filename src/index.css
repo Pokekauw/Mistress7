@@ -162,19 +162,11 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ---------- attention debt ⏳ a living cooldown bar ---------- */
-@keyframes debt-flow {
-  from {
-    background-position: 0 0;
-  }
-  to {
-    background-position: -32px 0;
-  }
-}
 @keyframes debt-sheen {
   0% {
     transform: translateX(-130%);
   }
-  60%,
+  38%,
   100% {
     transform: translateX(320%);
   }
@@ -211,19 +203,6 @@ input[type="range"]::-moz-range-thumb {
     background-color 0.6s ease;
 }
 
-/* diagonal ribs drifting towards the drain — the bar is never static */
-.debt-fill::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image: repeating-linear-gradient(
-    115deg,
-    rgba(255, 255, 255, 0.22) 0 5px,
-    rgba(255, 255, 255, 0) 5px 16px
-  );
-  animation: debt-flow 1.4s linear infinite;
-}
-
 /* a slow shine sweeping the length of what is left */
 .debt-fill::after {
   content: "";
@@ -237,7 +216,7 @@ input[type="range"]::-moz-range-thumb {
     transparent 100%
   );
   transform: translateX(-130%);
-  animation: debt-sheen 3.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: debt-sheen 6.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 .debt-fill.urgent {
@@ -250,7 +229,6 @@ input[type="range"]::-moz-range-thumb {
 
 @media (prefers-reduced-motion: reduce) {
   .debt-fill,
-  .debt-fill::before,
   .debt-fill::after,
   .debt-fill.urgent,
   .debt-breathe {

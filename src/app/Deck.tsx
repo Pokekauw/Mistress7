@@ -85,6 +85,45 @@ function Spark({ data }: { data: number[] }) {
   );
 }
 
+
+const MISTRESS_EMOJI_PRESETS = [
+  { label: "Standard", value: "..🖤💅✨" },
+  { label: "Sur", value: "😡🖤💅✨" },
+  { label: "Arrogant", value: "😏👑💅✨" },
+  { label: "Dårligt svar", value: "..🤦‍♀️🙄🖤💅✨" },
+  { label: "Vær stille", value: "🤫🖤💅✨" },
+  { label: "Dressings", value: "👗🦋👜💅✨" },
+  { label: "Kick", value: "💨👢🍒💥" },
+  { label: "Lick!", value: "👢👅👅" },
+] as const;
+
+const EMOJI_GROUPS = [
+  {
+    label: "Faces",
+    emojis: "😀 😃 😄 😁 😆 😅 😂 🤣 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🫢 🫣 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫥 😏 😒 🙄 😬 😮‍💨 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 😵‍💫 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 🫤 😟 🙁 ☹️ 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 ☠️ 💩 🤡 👹 👺 👻 👽 👾 🤖".split(" "),
+  },
+  {
+    label: "Hands & body",
+    emojis: "👋 🤚 🖐️ ✋ 🖖 🫱 🫲 🫳 🫴 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 🫵 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🤝 🙏 ✍️ 💅 🤳 💪 🦾 🦿 🦵 🦶 👂 🦻 👃 🧠 🫀 🫁 🦷 🦴 👀 👁️ 👅 👄 🫦 💋".split(" "),
+  },
+  {
+    label: "Hearts & symbols",
+    emojis: "🖤 ❤️ 🧡 💛 💚 💙 💜 🤎 🤍 🩶 🩷 🩵 💔 ❤️‍🔥 ❤️‍🩹 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ☮️ ✝️ ☪️ 🕉️ ☸️ ✡️ 🔯 🕎 ☯️ ☦️ 🛐 ⛎ ♈ ♉ ♊ ♋ ♌ ♍ ♎ ♏ ♐ ♑ ♒ ♓ 🆔 ⚛️ 🉑 ☢️ ☣️ 📴 📳 🈶 🈚 🈸 🈺 🈷️ ✴️ 🆚 💮 🉐 ㊙️ ㊗️ 🈴 🈵 🈹 🈲 🅰️ 🅱️ 🆎 🆑 🅾️ 🆘 ❌ ⭕ 🛑 ⛔ 📛 🚫 💯 💢 ♨️ 🚷 🚯 🚳 🚱 🔞 📵 🚭 ❗ ❕ ❓ ❔ ‼️ ⁉️ 🔅 🔆 〽️ ⚠️ 🚸 🔱 ⚜️ 🔰 ♻️ ✅ 🈯 💹 ❇️ ✳️ ❎ 🌐 💠 Ⓜ️ 🌀 💤 🏧 🚾 ♿ 🅿️ 🈳 🈂️ 🛂 🛃 🛄 🛅 🚹 🚺 🚼 ⚧️ 🚻 🚮 🎦 📶 🈁 🔣 ℹ️ 🔤 🔡 🔠 🆖 🆗 🆙 🆒 🆕 🆓 0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟".split(" "),
+  },
+  {
+    label: "Power",
+    emojis: "👑 💎 🗝️ ⛓️ 🔒 🔓 🕯️ 🪞 🪄 ✨ 🌟 💫 ⚡ 🔥 🩸 🧿 🪬 🦋 🕸️ 🕷️ 🐍 🦂 🐈‍⬛ 🦇 🦢 🌹 🥀 🍒 🍓 🍷 🥂 🍾 🧊 🎀 🎁 🪩 🎭 🎪 🎯 🏆 🥇 🏅 🎖️ 🧨 💥 💨".split(" "),
+  },
+  {
+    label: "Clothes & objects",
+    emojis: "👠 👡 👢 🥿 👞 👟 🩰 🧦 🧤 👜 👛 🎒 👝 👗 👙 🩱 👘 🥻 👚 👕 👖 🧥 🧣 👒 🎩 🧢 ⛑️ 📿 💄 💍 💼 🕶️ 👓 🪭 🧸 🛏️ 🪑 🚪 🪟 🧼 🧴 🧽 🪣 🧹 🧺 🪠 🧻 🪒 🧷 🪡 🧵 ✂️ 📌 📍 📝 ✉️ 📲 📷 🎥 🎙️ 🎧 🔔 🔕 📣".split(" "),
+  },
+  {
+    label: "Animals & nature",
+    emojis: "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐻‍❄️ 🐨 🐯 🦁 🐮 🐷 🐽 🐸 🐵 🙈 🙉 🙊 🐒 🐔 🐧 🐦 🐤 🐣 🐥 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🪲 🐞 🦋 🐌 🐛 🦟 🦗 🕷️ 🦂 🐢 🐍 🦎 🦖 🦕 🐙 🦑 🦐 🦞 🦀 🪼 🐡 🐠 🐟 🐬 🐳 🐋 🦈 🦭 🐊 🐅 🐆 🦓 🦍 🦧 🦣 🐘 🦛 🦏 🐪 🐫 🦒 🦘 🦬 🐃 🐂 🐄 🐎 🐖 🐏 🐑 🦙 🐐 🦌 🫎 🐕 🐩 🦮 🐕‍🦺 🐈 🐈‍⬛ 🪶 🐓 🦃 🦤 🦚 🦜 🦢 🦩 🕊️ 🐇 🦝 🦨 🦡 🦫 🦦 🦥 🐁 🐀 🐿️ 🦔 🌵 🎄 🌲 🌳 🌴 🪵 🌱 🌿 ☘️ 🍀 🎍 🪴 🎋 🍃 🍂 🍁 🍄 🪨 🐚 🪸 🌾 💐 🌷 🌹 🥀 🪻 🪷 🌺 🌸 🌼 🌻".split(" "),
+  },
+] as const;
+
 function SlaveCard({ s, on, onClick, avatar }: { s: Slave; on: boolean; onClick: () => void; avatar: string }) {
   const debt = attentionDebt(s);
   const writing = useStore((st) => isTyping(st, s.id, "sub"));
@@ -169,6 +208,8 @@ function Thread({ slave }: { slave: Slave }) {
   const dungeon = useStore((s) => s.dungeon);
   const [text, setText] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [unread, setUnread] = useState(0);
@@ -221,10 +262,25 @@ function Thread({ slave }: { slave: Slave }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slave.id, msgs.length]);
 
+  const insertSnippet = (snippet: string) => {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? text.length;
+    const end = input?.selectionEnd ?? text.length;
+    const next = `${text.slice(0, start)}${snippet}${text.slice(end)}`;
+    setText(next);
+    setTyping(slave.id, "mistress", next.trim().length > 0);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const caret = start + snippet.length;
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
   const send = () => {
     if (!text.trim()) return;
     sendMistressText(slave.id, text.trim());
     setText("");
+    setEmojiOpen(false);
     setTyping(slave.id, "mistress", false);
   };
 
@@ -510,21 +566,84 @@ function Thread({ slave }: { slave: Slave }) {
         </button>
       )}
 
-      <div className="flex gap-2 border-t border-white/8 p-3">
-        <input
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setTyping(slave.id, "mistress", e.target.value.trim().length > 0);
-          }}
-          onBlur={() => setTyping(slave.id, "mistress", false)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder={`Address ${slave.name}…`}
-          className="flex-1 rounded-full border border-white/12 bg-black/40 px-4 py-2.5 text-[14px] outline-none focus:border-brass/50"
-        />
-        <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
-          Send
-        </button>
+      <div className="border-t border-white/8 bg-[#080508]/88 p-3 backdrop-blur">
+        {emojiOpen && (
+          <div className="mb-3 rounded-2xl border border-brass/25 bg-[#0c0810]/95 p-3 shadow-[0_-18px_50px_-28px_rgba(0,0,0,.95)]">
+            <div className="flex items-center gap-2">
+              <span className="label">Mistress favourites</span>
+              <span className="flex-1" />
+              <button
+                onClick={() => setEmojiOpen(false)}
+                className="rounded-full px-2 text-[13px] text-white/35 transition hover:bg-white/8 hover:text-white/70"
+                title="Close emoji panel"
+              >
+                ×
+              </button>
+            </div>
+            <div className="thin-scroll mt-2 flex gap-1.5 overflow-x-auto pb-1">
+              {MISTRESS_EMOJI_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => insertSnippet(p.value)}
+                  title={p.value}
+                  className="shrink-0 rounded-full border border-brass/35 bg-brass/10 px-3 py-1.5 text-[11px] text-brass-soft transition hover:border-brass/70 hover:bg-brass/18"
+                >
+                  <span className="mr-1.5 font-mono text-[9.5px] text-white/45">{p.label}</span>
+                  {p.value}
+                </button>
+              ))}
+            </div>
+
+            <div className="thin-scroll mt-3 max-h-44 space-y-3 overflow-y-auto pr-1">
+              {EMOJI_GROUPS.map((group) => (
+                <div key={group.label}>
+                  <div className="mb-1.5 font-mono text-[9px] tracking-[0.16em] text-white/30 uppercase">{group.label}</div>
+                  <div className="grid grid-cols-8 gap-1 sm:grid-cols-12">
+                    {group.emojis.map((emoji) => (
+                      <button
+                        key={`${group.label}-${emoji}`}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => insertSnippet(emoji)}
+                        className="rounded-lg border border-white/8 bg-white/[0.025] py-1.5 text-[18px] transition hover:border-brass/45 hover:bg-brass/10"
+                        title={emoji}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setTyping(slave.id, "mistress", e.target.value.trim().length > 0);
+            }}
+            onBlur={() => setTyping(slave.id, "mistress", false)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+            placeholder={`Address ${slave.name}…`}
+            className="min-w-0 flex-1 rounded-full border border-white/12 bg-black/40 px-4 py-2.5 text-[14px] outline-none focus:border-brass/50"
+          />
+          <button
+            onClick={() => setEmojiOpen((v) => !v)}
+            title="Emoji & favourites"
+            className={`rounded-full border px-3 text-[16px] transition ${
+              emojiOpen ? "border-brass/65 bg-brass/18 text-brass-soft" : "border-white/12 bg-black/35 text-white/65 hover:border-brass/45 hover:text-brass-soft"
+            }`}
+          >
+            😊
+          </button>
+          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
+            Send
+          </button>
+        </div>
       </div>
 
       {lightbox && (
