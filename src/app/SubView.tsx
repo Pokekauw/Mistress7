@@ -10,6 +10,7 @@ import TelegramPanel from "../components/TelegramPanel";
 import TelegramInline from "../components/TelegramInline";
 import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
+import Linkify from "../components/Linkify";
 import {
   avatarFor,
   bgStyle,
@@ -288,78 +289,85 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   return (
     <div className="page-canvas relative flex min-h-screen flex-col">
       <div className="relative z-10 mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-4">
-        {/* header */}
-        <header className="flex items-start gap-3 py-4">
-          <div className="min-w-0">
-            <AvatarPlate name={dungeon.name} honorific={dungeon.honorific} src={dungeon.avatarUrl} />
+        {/* header — one tidy line: whose house this is, and the way out */}
+        <header className="flex flex-wrap items-center gap-x-1.5 gap-y-2 py-2.5">
+          <div className="min-w-0 flex-1">
+            <AvatarPlate name={dungeon.name} honorific={dungeon.honorific} src={dungeon.avatarUrl} compact />
           </div>
-          <span className="flex-1" />
-
-          <div className="flex flex-col items-end gap-1.5">
-            {/* the collar line: who he is, and the way out */}
-            <div className="flex items-center gap-2">
-              <ConnBadge />
-              <button
-                onClick={() => setSheet("key")}
-                className="hidden text-right sm:block"
-                title="Your permanent code"
-              >
-                <div className="label">You 🖤</div>
-                <div className="font-display text-[1rem] leading-none text-white/70">
-                  {slave.name} · <span className="text-brass-soft/80">{rankOf(slave.devotion)}</span>
-                </div>
-                <div className="mt-0.5 font-mono text-[9.5px] tracking-[0.16em] text-brass/60">
-                  🗝️ {slave.accessCode}
-                </div>
-              </button>
-              <button
-                onClick={() => setSheet("telegram")}
-                title="Telegram alerts"
-                className={`rounded-full border px-3 py-1.5 text-[11.5px] ${
-                  slave.telegram ? "border-emerald-400/40 text-emerald-200" : "border-white/12 text-white/55"
-                }`}
-              >
-                {slave.telegram ? "🔔" : "🔕"}
-              </button>
-              <button
-                onClick={() => setSheet("limits")}
-                className="rounded-full border border-white/12 px-3 py-1.5 text-[11.5px] text-white/55"
-              >
-                Limits
-              </button>
-              <button
-                onClick={() => {
-                  setSession({ role: null, slaveId: null });
-                  go("#/");
-                }}
-                className="rounded-full border border-white/12 px-3 py-1.5 text-[11.5px] text-white/55"
-              >
-                Exit
-              </button>
-            </div>
-
-            {/* just beneath Limits and Exit */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setSheet("rules")}
-                title={`${dungeon.honorific}'s house rules`}
-                className="rounded-full border border-brass/35 bg-brass/8 px-3 py-1.5 text-[11.5px] text-brass-soft/90 transition hover:border-brass/70"
-              >
-                📜 House Rules
-              </button>
-              <button
-                onClick={() => setSheet("guide")}
-                title="How this app works for a slave"
-                className="rounded-full border border-violet-400/35 bg-violet-500/10 px-3 py-1.5 text-[11.5px] text-violet-100/90 transition hover:border-violet-400/70"
-              >
-                🧭 Guide
-              </button>
-            </div>
-          </div>
+          <ConnBadge />
+          <button
+            onClick={() => setSheet("telegram")}
+            title="Telegram alerts"
+            className={`shrink-0 rounded-full border px-2.5 py-1.5 text-[11.5px] transition ${
+              slave.telegram ? "border-emerald-400/40 text-emerald-200" : "border-white/12 text-white/55"
+            }`}
+          >
+            {slave.telegram ? "🔔" : "🔕"}
+          </button>
+          <button
+            onClick={() => setSheet("limits")}
+            title="Your hard limits"
+            className="shrink-0 rounded-full border border-white/12 px-2.5 py-1.5 text-[11.5px] text-white/55 transition hover:border-white/25"
+          >
+            Limits
+          </button>
+          <button
+            onClick={() => {
+              setSession({ role: null, slaveId: null });
+              go("#/");
+            }}
+            title="Leave this room"
+            className="shrink-0 rounded-full border border-white/12 px-2.5 py-1.5 text-[11.5px] text-white/55 transition hover:border-white/25"
+          >
+            Exit
+          </button>
         </header>
 
+        {/* the collar line — who he is, his key, and her laws, in one slim row */}
+        <div className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.025] px-1.5 py-1">
+          <button
+            onClick={() => setSheet("key")}
+            title="Your standing and your permanent code"
+            className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition hover:bg-white/[0.05]"
+          >
+            <SlaveAvatar size={24} src={avatarFor(slave, dungeon)} name={slave.name} />
+            <span className="min-w-0">
+              <span className="block max-w-[9.5rem] truncate text-[12.5px] leading-tight text-white/85">
+                {slave.name}
+              </span>
+              <span className="block max-w-[9.5rem] truncate font-mono text-[8.5px] leading-tight tracking-[0.14em] text-brass/75 uppercase">
+                {rankOf(slave.devotion)}
+              </span>
+            </span>
+          </button>
+
+          <span className="flex-1" />
+
+          <button
+            onClick={() => setSheet("key")}
+            title="Your permanent code"
+            className="shrink-0 rounded-full border border-brass/25 bg-brass/8 px-2.5 py-1 font-mono text-[9.5px] tracking-[0.14em] text-brass-soft/85 transition hover:border-brass/60"
+          >
+            🗝️<span className="hidden sm:inline"> {slave.accessCode}</span>
+          </button>
+          <button
+            onClick={() => setSheet("rules")}
+            title={`${dungeon.honorific}'s house rules`}
+            className="shrink-0 rounded-full border border-brass/30 bg-brass/8 px-2.5 py-1 text-[11px] text-brass-soft/90 transition hover:border-brass/70"
+          >
+            📜<span className="hidden sm:inline"> Rules</span>
+          </button>
+          <button
+            onClick={() => setSheet("guide")}
+            title="How this app works for a slave"
+            className="shrink-0 rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-[11px] text-violet-100/90 transition hover:border-violet-400/70"
+          >
+            🧭<span className="hidden sm:inline"> Guide</span>
+          </button>
+        </div>
+
         {/* conditions */}
-        <div className="grid grid-cols-5 gap-1.5">
+        <div className="mt-2.5 grid grid-cols-5 gap-1.5">
           {[
             { l: "🖤 Devotion", v: String(slave.devotion), tone: "gold" },
             { l: "💥 Strikes", v: String(slave.strikes), tone: slave.strikes > 2 ? "red" : "muted" },
@@ -395,6 +403,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
         <div className="mt-2">
           <StatusBanner
             slave={slave}
+            dungeon={dungeon}
             pendingProof={pendingProof}
             openCheckIn={locReq}
             pendingTribute={pending[0]}
@@ -475,7 +484,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
             if (m.kind === "system" || m.kind === "refusal")
               return (
                 <div key={m.id} className="rounded-lg border-l-2 border-white/20 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white/55">
-                  {m.text}
+                  <Linkify text={m.text} />
                   <div className="mt-1">
                     <Stamp at={m.time} className="text-white/25" />
                   </div>
@@ -504,7 +513,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                       m.from === "mistress" ? "text-brass-soft/90" : "text-white/55"
                     }`}
                   >
-                    {m.text}
+                    <Linkify text={m.text} />
                   </div>
                   {m.ritual && (
                     <div
@@ -633,7 +642,11 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                       📎 {m.file?.name || "file"} · {Math.round((m.file?.size || 0) / 1024)} KB
                     </div>
                   )}
-                  {m.text && <p className="mt-2 text-[12.5px] text-white/70">{m.text}</p>}
+                  {m.text && (
+                    <p className="mt-2 text-[12.5px] text-white/70">
+                      <Linkify text={m.text} />
+                    </p>
+                  )}
                   <div className="mt-1.5 flex items-center gap-1.5">
                     <Stamp at={m.time} className="text-white/30" />
                     {m.from === "sub" && <ReadTicks m={m} className="ml-1" />}
@@ -646,13 +659,13 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                 <div className={`flex w-full items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
                   {!mine && <Avatar size={30} src={dungeon.avatarUrl} />}
                   <div
-                    className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug ${
+                    className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug [overflow-wrap:anywhere] ${
                       mine
                         ? "rounded-br-md border border-white/10 bg-white/[0.06] text-white/80"
                         : "font-display rounded-bl-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
                     }`}
                   >
-                    {m.text}
+                    <Linkify text={m.text} className={mine ? "text-white underline-offset-2" : ""} />
                   </div>
                   {mine && <SlaveAvatar size={28} src={avatarFor(slave, dungeon)} name={slave.name} />}
                 </div>

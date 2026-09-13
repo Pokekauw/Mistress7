@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { money, unlockMedia, viewMedia, type Msg } from "../lib/store";
 import { ReadTicks, Stamp } from "./MessageMeta";
+import Linkify from "./Linkify";
 
 export default function MediaBubble({
   m,
@@ -121,7 +122,9 @@ export default function MediaBubble({
           {/* caption */}
           {m.text && !burned && (
             <div className="border-t border-white/8 px-3 py-2.5">
-              <p className="font-display text-[13.5px] leading-snug text-brass-soft/90 italic">🖤 {m.text}</p>
+              <p className="font-display text-[13.5px] leading-snug text-brass-soft/90 italic">
+                🖤 <Linkify text={m.text} />
+              </p>
             </div>
           )}
 

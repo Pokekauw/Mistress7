@@ -29,7 +29,7 @@ export default function PunishmentWheel({
 }) {
   const [angle, setAngle] = useState(0);
   const [spinning, setSpinning] = useState(false);
-  const [result, setResult] = useState<(typeof WHEEL)[number] | null>(null);
+  const [result, setResult] = useState<ReturnType<typeof applyWheel> | null>(null);
   const spins = useRef(0);
 
   const total = WHEEL.length;
@@ -47,10 +47,14 @@ export default function PunishmentWheel({
     setAngle(target);
 
     window.setTimeout(() => {
-      const slice = applyWheel(slave.id, idx);
-      setResult(slice);
+      const outcome = applyWheel(slave.id, idx);
+      setResult(outcome);
       setSpinning(false);
-      onResult(`🎡 ${slice.icon} ${slice.label}`);
+      onResult(
+        `🎡 ${outcome.slice.icon} ${outcome.slice.label}${
+          outcome.devotion ? ` · ${outcome.devotion > 0 ? "+" : "−"}${Math.abs(outcome.devotion)} ♥` : ""
+        }`
+      );
     }, 4200);
   };
 
@@ -110,12 +114,13 @@ export default function PunishmentWheel({
         {/* result */}
         {result ? (
           <div className="mt-6 rounded-xl border border-brass/40 bg-brass/10 p-4">
-            <div className="text-[26px]">{result.icon}</div>
-            <div className="font-display mt-1 text-[1.35rem] leading-tight text-white">{result.label}</div>
+            <div className="text-[26px]">{result.slice.icon}</div>
+            <div className="font-display mt-1 text-[1.35rem] leading-tight text-white">{result.slice.label}</div>
             {result.devotion !== 0 && (
               <div className={`mt-1.5 font-mono text-[12px] ${result.devotion > 0 ? "text-emerald-300" : "text-rose-300"}`}>
-                {result.devotion > 0 ? "+" : ""}
-                {result.devotion} devotion
+                {result.devotion > 0 ? "+" : "−"}
+                {Math.abs(result.devotion)} devotion
+                {result.doubled && <span className="ml-1.5 text-violet-300">×2 · chastity 🔒</span>}
               </div>
             )}
             <p className="mt-2 text-[11.5px] text-white/45">Recorded in {slave.name}'s history ⛓️</p>

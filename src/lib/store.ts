@@ -160,6 +160,29 @@ export type Msg = {
 
 export type { Invite } from "./invites";
 
+/**
+ * What each kind of strike costs in devotion. The defaults are the values this
+ * house has always used; the Mistress may lower — or raise — every one of them,
+ * so she can whip a slave without smashing his devotion to pieces.
+ *
+ * Costs are *base* values: a slave held in chastity pays double (see
+ * CHASTITY_DAMAGE_MULTIPLIER).
+ */
+export type DisciplineCosts = {
+  /** instrument id (🖐️ 🏇 🪢 🎋 👢) → devotion taken per stroke */
+  implements: Record<string, number>;
+  /** the quick 💥 Strike command on the deck */
+  quickStrike: number;
+  /** wheel slice id → devotion taken (negative) or granted (positive) */
+  wheel: Record<string, number>;
+  /** every silence window that expires unanswered (⏳ attention debt) */
+  attention: number;
+  /** a 📍 check-in that closed without an answer */
+  missedCheckIn: number;
+  /** 📸 proof she rejects */
+  proofRejected: number;
+};
+
 /** a chat backdrop: either a colour wash or an image */
 export type ChatBg = {
   kind: "preset" | "image";
@@ -209,6 +232,8 @@ export type Dungeon = {
   slaveAvatarUrl?: string;
   /** house-wide chat backdrop; a slave may override it */
   chatBg?: ChatBg;
+  /** what each kind of strike costs — absent means the house defaults */
+  discipline?: Partial<DisciplineCosts>;
 };
 
 /** a live "he is writing / she is writing" heartbeat, one per party */
@@ -272,11 +297,50 @@ export function timeLeft(ms: number) {
 export const isGagged = (s: Slave) => s.gagUntil > Date.now();
 export const isLocked = (s: Slave) => s.lockUntil > Date.now();
 
+/* ===================== chastity = double damage 🔒 ===================== */
+/**
+ * A slave held in chastity is on a shorter leash and pays twice as dearly:
+ * every automatic devotion loss is multiplied by this, and his attention-debt
+ * window shrinks to CHASTITY_ATTENTION_HOURS.
+ */
+export const CHASTITY_DAMAGE_MULTIPLIER = 2;
+/** while locked, he has only this long to speak or serve before devotion is taken */
+export const CHASTITY_ATTENTION_HOURS = 6;
+
+/** 2 while he is held in chastity, 1 otherwise */
+export const damageMultiplier = (s: Slave) => (isLocked(s) ? CHASTITY_DAMAGE_MULTIPLIER : 1);
+
+/**
+ * The devotion ACTUALLY taken for a base loss — doubled under chastity, and
+ * never more than he has. Rewards are never doubled: only pain is.
+ */
+export function lossAmount(x: Slave, base: number) {
+  if (!(base > 0)) return 0;
+  return Math.min(x.devotion, Math.round(base * damageMultiplier(x)));
+}
+
+/** what he is left with after a base loss */
+export function afterLoss(x: Slave, base: number) {
+  return Math.max(0, x.devotion - lossAmount(x, base));
+}
+
+/** what he is left with after a reward — capped at ♥100, never doubled */
+export function afterGain(x: Slave, base: number) {
+  if (!(base > 0)) return x.devotion;
+  return Math.min(100, x.devotion + Math.round(base));
+}
+
 /* ===================== attention debt timer ⏳ ===================== */
 /** Default silence window before devotion is taken automatically */
 export const DEFAULT_ATTENTION_HOURS = 12;
 /** devotion removed every time an attention-debt window expires in silence */
 export const ATTENTION_PENALTY = 10;
+/** devotion removed when a 📍 check-in window closes unanswered */
+export const MISSED_CHECKIN_PENALTY = 6;
+/** devotion removed when 📸 proof is rejected */
+export const PROOF_REJECT_PENALTY = 4;
+/** devotion removed by the quick 💥 Strike command */
+export const QUICK_STRIKE_PENALTY = 3;
 /** a ritual button earns its devotion at most once per rolling 24h */
 export const RITUAL_COOLDOWN_MS = 24 * 3600 * 1000;
 /** repeating the same ritual inside this window folds into one chat line */
@@ -390,8 +454,21 @@ export function seenAgo(t?: number | null) {
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
 
-export const attentionWindowMs = (s: Slave) =>
-  (s.attentionHours && s.attentionHours > 0 ? s.attentionHours : DEFAULT_ATTENTION_HOURS) * 3600_000;
+/**
+ * The length of his current silence window, in milliseconds.
+ *
+ * Her per-slave setting (or the 12h house default) is the baseline — but a
+ * slave held in chastity is on a six-hour leash: the lock shortens the window,
+ * and it can never lengthen it past a stricter setting she has made herself.
+ */
+export const attentionWindowMs = (s: Slave) => {
+  const base = (s.attentionHours && s.attentionHours > 0 ? s.attentionHours : DEFAULT_ATTENTION_HOURS) * 3600_000;
+  return isLocked(s) ? Math.min(base, CHASTITY_ATTENTION_HOURS * 3600_000) : base;
+};
+
+/** the same window in hours, for copy — 6 while he is locked */
+export const attentionWindowHours = (s: Slave) =>
+  Math.round((attentionWindowMs(s) / 3600_000) * 10) / 10;
 
 /** the moment the timer is counting from — only the submissive's own activity moves it */
 export const attentionAnchor = (s: Slave) => s.lastActiveAt ?? s.lastTouched ?? s.joinedAt ?? Date.now();
@@ -892,26 +969,35 @@ export function fireCommand(cmd: CommandId, ids: string[], arg?: string | number
         }
         case "lock": {
           const mins = Number(arg) || 60;
-          next = mapSlave(next, id, (x) => touch({ ...x, lockUntil: Date.now() + mins * 60000 }));
+          /* the lock shortens his leash to six hours — and starts it fresh, now */
+          next = mapSlave(next, id, (x) =>
+            touch({ ...x, lockUntil: Date.now() + mins * 60000, lastActiveAt: Date.now() })
+          );
           next = pushMsg(next, {
             slaveId: id,
             from: "mistress",
             kind: "decree",
             title: "Mistress Locks",
-            text: `You are held in chastity for ${fmtMins(mins)}. The key is hers alone.`,
+            text: `You are held in chastity for ${fmtMins(mins)}. The key is hers alone. While it is on you, every devotion you lose is doubled ×${CHASTITY_DAMAGE_MULTIPLIER}, and you have ${CHASTITY_ATTENTION_HOURS} hours — not ${DEFAULT_ATTENTION_HOURS} — to speak or serve before silence is charged. 🔒`,
           });
           break;
         }
-        case "strike":
-          next = mapSlave(next, id, (x) => touch({ ...x, strikes: x.strikes + 1, devotion: Math.max(0, x.devotion - 3) }));
+        case "strike": {
+          /* her own price for a quick strike — and doubled while he is locked */
+          const cost = disciplineOf(next.dungeon).quickStrike;
+          const taken = lossAmount(slave, cost);
+          next = mapSlave(next, id, (x) => touch({ ...x, strikes: x.strikes + 1, devotion: afterLoss(x, cost) }));
           next = pushMsg(next, {
             slaveId: id,
             from: "mistress",
             kind: "decree",
             title: "Mistress Strikes",
-            text: "A strike is entered against your record. Do not earn another.",
+            text: `A strike is entered against your record. Do not earn another. (−${taken} devotion${
+              taken > cost ? " · doubled in chastity 🔒" : ""
+            })`,
           });
           break;
+        }
         case "penance":
           next = mapSlave(next, id, (x) => touch({ ...x, penance: String(arg || "Write two hundred lines of gratitude.") }));
           next = pushMsg(next, {
@@ -1864,45 +1950,163 @@ export const IMPLEMENTS = [
 
 export type ImplementId = (typeof IMPLEMENTS)[number]["id"];
 
+/* ===================== what a strike costs ⚖️ ===================== */
+/**
+ * The Mistress decides how dearly each kind of strike costs. The defaults are
+ * the values the house has always used (see IMPLEMENTS / WHEEL / the automatic
+ * fines); she may lower them so a whipping does not flatten a slave's devotion,
+ * or raise them when she means it.
+ *
+ * Everything here is a BASE cost — a slave held in chastity pays double.
+ */
+
+const COST_MIN = 0;
+const COST_MAX = 100;
+
+function clampCost(v: unknown, fallback: number, min = COST_MIN, max = COST_MAX) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+}
+
+/** the house defaults, derived from the instruments and the wheel themselves */
+export function defaultDiscipline(): DisciplineCosts {
+  return {
+    implements: Object.fromEntries(IMPLEMENTS.map((i) => [i.id, i.cost])),
+    quickStrike: QUICK_STRIKE_PENALTY,
+    wheel: Object.fromEntries(WHEEL.map((w) => [w.id, w.devotion])),
+    attention: ATTENTION_PENALTY,
+    missedCheckIn: MISSED_CHECKIN_PENALTY,
+    proofRejected: PROOF_REJECT_PENALTY,
+  };
+}
+
+/** read the house's costs, filling in anything an older house never stored */
+export function disciplineOf(d?: Dungeon | null): DisciplineCosts {
+  const base = defaultDiscipline();
+  const raw = d?.discipline;
+  if (!raw) return base;
+
+  const table = (rec: Record<string, number> | undefined, known: Record<string, number>, min: number) => {
+    const out: Record<string, number> = { ...known };
+    Object.keys(known).forEach((k) => {
+      if (rec && rec[k] != null) out[k] = clampCost(rec[k], known[k], min, COST_MAX);
+    });
+    return out;
+  };
+
+  return {
+    implements: table(raw.implements, base.implements, COST_MIN),
+    /* wheel costs are signed: mercy grants devotion */
+    wheel: table(raw.wheel, base.wheel, -COST_MAX),
+    quickStrike: clampCost(raw.quickStrike, base.quickStrike),
+    attention: clampCost(raw.attention, base.attention),
+    missedCheckIn: clampCost(raw.missedCheckIn, base.missedCheckIn),
+    proofRejected: clampCost(raw.proofRejected, base.proofRejected),
+  };
+}
+
+/** devotion taken per stroke of an instrument, as she has set it */
+export function implementCost(d: Dungeon | undefined | null, id: ImplementId) {
+  return disciplineOf(d).implements[id] ?? IMPLEMENTS.find((i) => i.id === id)?.cost ?? 0;
+}
+
+/** what a wheel slice is worth, as she has set it (negative = devotion taken) */
+export function wheelCost(d: Dungeon | undefined | null, id: string) {
+  return disciplineOf(d).wheel[id] ?? WHEEL.find((w) => w.id === id)?.devotion ?? 0;
+}
+
+/** the Mistress rewrites one or more costs; changes land on every device */
+export function setDiscipline(patch: Partial<DisciplineCosts>) {
+  update((s) => {
+    const current = disciplineOf(s.dungeon);
+    const next: DisciplineCosts = {
+      ...current,
+      ...patch,
+      implements: { ...current.implements, ...(patch.implements || {}) },
+      wheel: { ...current.wheel, ...(patch.wheel || {}) },
+    };
+    /* never spam the ledger for a no-op */
+    if (JSON.stringify(next) === JSON.stringify(current)) return s;
+    return pushEvent(
+      { ...s, dungeon: { ...s.dungeon, discipline: next } },
+      "⚖️ Discipline costs adjusted",
+      "muted"
+    );
+  });
+}
+
+/** back to the values the house was built with */
+export function resetDiscipline() {
+  update((s) =>
+    pushEvent(
+      { ...s, dungeon: { ...s.dungeon, discipline: defaultDiscipline() } },
+      "⚖️ Discipline costs restored to house defaults",
+      "muted"
+    )
+  );
+}
+
+/**
+ * Administer strokes with an instrument. The base price comes from her own
+ * table; a slave in chastity pays double, and every line says exactly what was
+ * taken so nobody has to guess.
+ */
 export function strikeWith(ids: string[], implId: ImplementId, count = 1) {
   const impl = IMPLEMENTS.find((i) => i.id === implId)!;
-  const loss = impl.cost * count;
+  const base = implementCost(state.dungeon, implId) * count;
+  const results: { name: string; taken: number; doubled: boolean }[] = [];
+
   update((s) => {
     let next = s;
     ids.forEach((id) => {
-      next = mapSlave(next, id, (x) =>
-        addLog(
+      const before = next.slaves.find((x) => x.id === id);
+      if (!before) return;
+      const taken = lossAmount(before, base);
+      const doubled = taken > base;
+      results.push({ name: before.name, taken, doubled });
+
+      next = mapSlave(next, id, (x) => {
+        const devotion = afterLoss(x, base);
+        return addLog(
           {
             ...x,
             strikes: x.strikes + count,
-            devotion: Math.max(0, x.devotion - loss),
+            devotion,
             lastTouched: Date.now(),
-            history: [...(x.history || []).slice(-6), Math.max(0, x.devotion - loss)],
+            history: [...(x.history || []).slice(-6), devotion],
           },
           {
             icon: impl.icon,
             label: `${impl.label} ×${count}`,
-            detail: impl.blurb,
-            devotion: -loss,
+            detail: doubled ? `${impl.blurb} — doubled, held in chastity 🔒` : impl.blurb,
+            devotion: -taken,
             kind: "strike",
           }
-        )
-      );
+        );
+      });
       next = pushMsg(next, {
         slaveId: id,
         from: "mistress",
         kind: "decree",
         title: "Mistress Strikes",
-        text: `${impl.icon} ${impl.label}${count > 1 ? ` · ${count} strokes` : ""}. ${impl.blurb} (−${loss} devotion)`,
+        text: `${impl.icon} ${impl.label}${count > 1 ? ` · ${count} strokes` : ""}. ${impl.blurb} (−${taken} devotion${
+          doubled ? " · doubled in chastity 🔒" : ""
+        })`,
       });
     });
+
+    const total = results.reduce((n, r) => n + r.taken, 0);
+    const names = results.map((r) => r.name).join(", ");
     return pushEvent(
       next,
-      `${impl.icon} ${impl.label} · ${count} ${count === 1 ? "stroke" : "strokes"} · −${loss} devotion`,
+      `${impl.icon} ${impl.label} · ${count} ${count === 1 ? "stroke" : "strokes"} · −${total} devotion${
+        results.some((r) => r.doubled) ? " 🔒" : ""
+      }${names ? ` · ${names}` : ""}`,
       "red"
     );
   });
-  return { impl, loss };
+
+  return { impl, base, results, loss: results.reduce((n, r) => n + r.taken, 0) };
 }
 
 /* ============================ punishment wheel 🎡 ============================ */
@@ -1912,7 +2116,13 @@ export type WheelSlice = {
   label: string;
   short: string;
   color: string;
-  apply: (x: Slave) => Slave;
+  /**
+   * `cost` is what THIS HOUSE charges for the slice (she may have changed it);
+   * negative takes devotion, positive grants it. Losses are doubled inside
+   * afterLoss while he is held in chastity.
+   */
+  apply: (x: Slave, cost: number) => Slave;
+  /** the default cost — her table starts here */
   devotion: number;
 };
 
@@ -1924,7 +2134,7 @@ export const WHEEL: WheelSlice[] = [
     short: "50 lashes",
     color: "#6d1027",
     devotion: -18,
-    apply: (x) => ({ ...x, strikes: x.strikes + 2, devotion: Math.max(0, x.devotion - 18) }),
+    apply: (x, cost) => ({ ...x, strikes: x.strikes + 2, devotion: afterLoss(x, Math.abs(cost)) }),
   },
   {
     id: "nosit",
@@ -1933,10 +2143,10 @@ export const WHEEL: WheelSlice[] = [
     short: "No sitting · 2h",
     color: "#3f1530",
     devotion: -6,
-    apply: (x) => ({
+    apply: (x, cost) => ({
       ...x,
       penance: "You will remain standing for two hours. You have not earned a chair. 🧍",
-      devotion: Math.max(0, x.devotion - 6),
+      devotion: afterLoss(x, Math.abs(cost)),
     }),
   },
   {
@@ -1946,10 +2156,10 @@ export const WHEEL: WheelSlice[] = [
     short: "100 lines",
     color: "#7a5a12",
     devotion: -4,
-    apply: (x) => ({
+    apply: (x, cost) => ({
       ...x,
       penance: "Write “I obey” one hundred times by hand, then photograph it. ✍️",
-      devotion: Math.max(0, x.devotion - 4),
+      devotion: afterLoss(x, Math.abs(cost)),
     }),
   },
   {
@@ -1959,7 +2169,14 @@ export const WHEEL: WheelSlice[] = [
     short: "Chastity · 24h",
     color: "#2f1550",
     devotion: -10,
-    apply: (x) => ({ ...x, lockUntil: Date.now() + 24 * 3600 * 1000, devotion: Math.max(0, x.devotion - 10) }),
+    /* the loss is measured on the slave as he is NOW — this slice is what locks him,
+       and the lock starts a fresh six-hour leash */
+    apply: (x, cost) => ({
+      ...x,
+      devotion: afterLoss(x, Math.abs(cost)),
+      lockUntil: Date.now() + 24 * 3600 * 1000,
+      lastActiveAt: Date.now(),
+    }),
   },
   {
     id: "strike",
@@ -1968,7 +2185,7 @@ export const WHEEL: WheelSlice[] = [
     short: "+1 strike",
     color: "#5a1020",
     devotion: -8,
-    apply: (x) => ({ ...x, strikes: x.strikes + 1, devotion: Math.max(0, x.devotion - 8) }),
+    apply: (x, cost) => ({ ...x, strikes: x.strikes + 1, devotion: afterLoss(x, Math.abs(cost)) }),
   },
   {
     id: "gag",
@@ -1977,7 +2194,7 @@ export const WHEEL: WheelSlice[] = [
     short: "Gag · 1h",
     color: "#4a3410",
     devotion: -5,
-    apply: (x) => ({ ...x, gagUntil: Date.now() + 3600 * 1000, devotion: Math.max(0, x.devotion - 5) }),
+    apply: (x, cost) => ({ ...x, gagUntil: Date.now() + 3600 * 1000, devotion: afterLoss(x, Math.abs(cost)) }),
   },
   {
     id: "tribute",
@@ -1995,7 +2212,7 @@ export const WHEEL: WheelSlice[] = [
     short: "Spared",
     color: "#14452f",
     devotion: 3,
-    apply: (x) => ({ ...x, devotion: Math.min(100, x.devotion + 3) }),
+    apply: (x, cost) => ({ ...x, devotion: afterGain(x, cost) }),
   },
 ];
 
@@ -2006,13 +2223,21 @@ export function pickWheelSlice() {
 
 export function applyWheel(slaveId: string, index: number) {
   const slice = WHEEL[index];
+  const cost = wheelCost(state.dungeon, slice.id);
+  const target = getSlave(slaveId);
+  /* measured up front so the wheel can report exactly what it took */
+  const taken = target ? slice.apply({ ...target, lastTouched: Date.now() }, cost).devotion - target.devotion : cost;
+  const doubled = taken < 0 && target != null && Math.abs(taken) > Math.abs(cost);
+
   update((s) => {
     let next = mapSlave(s, slaveId, (x) =>
-      addLog(slice.apply({ ...x, lastTouched: Date.now() }), {
+      addLog(slice.apply({ ...x, lastTouched: Date.now() }, cost), {
         icon: slice.icon,
         label: slice.label,
-        detail: "Determined by the Wheel of Punishment 🎡",
-        devotion: slice.devotion,
+        detail: doubled
+          ? "Determined by the Wheel of Punishment 🎡 — doubled, held in chastity 🔒"
+          : "Determined by the Wheel of Punishment 🎡",
+        devotion: taken,
         kind: "wheel",
       })
     );
@@ -2021,7 +2246,9 @@ export function applyWheel(slaveId: string, index: number) {
       from: "mistress",
       kind: "decree",
       title: "The Wheel Has Spoken",
-      text: `${slice.icon} ${slice.label}. The matter is settled.`,
+      text: `${slice.icon} ${slice.label}. The matter is settled.${
+        taken ? ` (${taken > 0 ? "+" : "−"}${Math.abs(taken)} devotion${doubled ? " · doubled in chastity 🔒" : ""})` : ""
+      }`,
     });
     if (slice.id === "tribute") {
       next = pushMsg(next, {
@@ -2035,9 +2262,13 @@ export function applyWheel(slaveId: string, index: number) {
       });
     }
     const sl = next.slaves.find((x) => x.id === slaveId)!;
-    return pushEvent(next, `🎡 ${sl.name} — ${slice.label}`, slice.id === "mercy" ? "green" : "red");
+    return pushEvent(
+      next,
+      `🎡 ${sl.name} — ${slice.label}${taken ? ` · ${taken > 0 ? "+" : "−"}${Math.abs(taken)} devotion` : ""}${doubled ? " 🔒" : ""}`,
+      slice.id === "mercy" ? "green" : "red"
+    );
   });
-  return slice;
+  return { slice, cost, devotion: taken, doubled };
 }
 
 /* ============================ conditions ============================ */
@@ -2046,7 +2277,9 @@ export function extendCondition(slaveId: string, what: "gag" | "lock", minutes: 
     let next = mapSlave(s, slaveId, (x) => {
       const key = what === "gag" ? "gagUntil" : "lockUntil";
       const base = Math.max(x[key], Date.now());
-      return addLog({ ...x, [key]: base + minutes * 60000, lastTouched: Date.now() }, {
+      /* a longer lock means a fresh six-hour leash; a gag changes nothing about it */
+      const leash = what === "lock" ? { lastActiveAt: Date.now() } : {};
+      return addLog({ ...x, [key]: base + minutes * 60000, lastTouched: Date.now(), ...leash }, {
         icon: what === "gag" ? "🤐" : "🔒",
         label: `${what === "gag" ? "Gag" : "Chastity"} Extended · +${fmtMins(minutes)}`,
         detail: "Extended by Mistress",
@@ -2260,6 +2493,9 @@ export function judgeProof(msgId: string, accept: boolean) {
   update((s) => {
     const msg = s.messages.find((m) => m.id === msgId);
     if (!msg) return s;
+    const cost = disciplineOf(s.dungeon).proofRejected;
+    const who = s.slaves.find((x) => x.id === msg.slaveId);
+    const taken = who ? lossAmount(who, cost) : cost;
     let next: State = {
       ...s,
       messages: s.messages.map((m) => (m.id === msgId ? { ...m, verdict: accept ? ("accepted" as const) : ("rejected" as const) } : m)),
@@ -2267,13 +2503,17 @@ export function judgeProof(msgId: string, accept: boolean) {
     next = mapSlave(next, msg.slaveId, (x) =>
       addLog(
         accept
-          ? { ...x, penance: null, devotion: Math.min(100, x.devotion + 8), lastTouched: Date.now() }
-          : { ...x, strikes: x.strikes + 1, devotion: Math.max(0, x.devotion - 4), lastTouched: Date.now() },
+          ? { ...x, penance: null, devotion: afterGain(x, 8), lastTouched: Date.now() }
+          : { ...x, strikes: x.strikes + 1, devotion: afterLoss(x, cost), lastTouched: Date.now() },
         {
           icon: accept ? "✅" : "❌",
           label: accept ? "Proof accepted" : "Proof rejected",
-          detail: accept ? "Adequate." : "Pathetic. Do it again.",
-          devotion: accept ? 8 : -4,
+          detail: accept
+            ? "Adequate."
+            : taken > cost
+              ? "Pathetic. Do it again. — doubled, held in chastity 🔒"
+              : "Pathetic. Do it again.",
+          devotion: accept ? 8 : -taken,
           kind: "proof",
         }
       )
@@ -2285,7 +2525,9 @@ export function judgeProof(msgId: string, accept: boolean) {
       title: accept ? "Proof Accepted" : "Proof Rejected",
       text: accept
         ? "Adequate. Your penance is discharged. (+8 devotion) 🖤"
-        : "Unacceptable. Do it again, and do it properly. (+1 strike) 💥",
+        : `Unacceptable. Do it again, and do it properly. (+1 strike · −${taken} devotion${
+            taken > cost ? " · doubled in chastity 🔒" : ""
+          }) 💥`,
     });
     const sl = next.slaves.find((x) => x.id === msg.slaveId)!;
     return pushEvent(
@@ -2381,13 +2623,16 @@ export function sweepLocationRequests() {
 
   update((s) => {
     let next = s;
+    const cost = disciplineOf(s.dungeon).missedCheckIn;
     overdue.forEach((req) => {
+      const who = next.slaves.find((x) => x.id === req.slaveId);
+      const taken = who ? lossAmount(who, cost) : cost;
       next = { ...next, messages: next.messages.map((m) => (m.id === req.id ? { ...m, locState: "expired" as const } : m)) };
       next = mapSlave(next, req.slaveId, (x) => ({
         ...x,
         strikes: x.strikes + 1,
         locMisses: (x.locMisses || 0) + 1,
-        devotion: Math.max(0, x.devotion - 6),
+        devotion: afterLoss(x, cost),
         penance:
           x.penance ||
           "You ignored a location check-in. Kneel for twenty minutes and photograph it as proof. 📍⛓️",
@@ -2396,7 +2641,9 @@ export function sweepLocationRequests() {
         slaveId: req.slaveId,
         from: "system",
         kind: "system",
-        text: "⏳ The check-in window closed without a response. One strike entered, six devotion lost, and a penance assigned automatically.",
+        text: `⏳ The check-in window closed without a response. One strike entered, ${taken} devotion lost${
+          taken > cost ? " — doubled, because you are held in chastity 🔒" : ""
+        }, and a penance assigned automatically.`,
       });
       const sl = next.slaves.find((x) => x.id === req.slaveId);
       if (sl) next = pushEvent(next, `⏳ Check-In Missed: ${sl.name} — penalty applied`, "red");
@@ -2411,10 +2658,12 @@ export function sweepLocationRequests() {
  * ⏳ Attention-debt sweep — runs on every tick.
  *
  * Each submissive carries an activity window (default 12 hours, individually
- * overridable per slave). If he has done NOTHING — no chat, ritual, tribute,
- * proof, location, reward unlock — when the window closes, 10 devotion is
- * removed automatically and the timer starts over. Merely opening the app or
- * looking around does not save him.
+ * overridable per slave, and shortened to six hours while he is held in
+ * chastity). If he has done NOTHING — no chat, ritual, tribute, proof,
+ * location, reward unlock — when the window closes, devotion is removed
+ * automatically and the timer starts over. How much is removed is the
+ * Mistress's own setting (see DisciplineCosts), doubled under chastity.
+ * Merely opening the app or looking around does not save him.
  *
  * If several whole windows elapsed while nobody had the house open, every
  * complete window is accounted for in one combined penalty on return.
@@ -2426,15 +2675,20 @@ export function sweepAttentionDebt() {
 
   update((s) => {
     let next = s;
+    const cost = disciplineOf(s.dungeon).attention;
     due.forEach((before) => {
       const id = before.id;
       const win = attentionWindowMs(before);
-      const hours = Math.round(win / 3600_000);
+      const hours = attentionWindowHours(before);
       const cycles = Math.max(1, Math.floor((now - attentionAnchor(before)) / win));
-      const loss = Math.min(before.devotion, ATTENTION_PENALTY * cycles);
+      /* one window's worth of silence, doubled while he is locked */
+      const perCycle = lossAmount(before, cost);
+      const doubled = perCycle > cost;
+      const loss = Math.min(before.devotion, perCycle * cycles);
       const after = Math.max(0, before.devotion - loss);
       /* timer starts over from the last expiry — the current partial window is preserved */
       const anchor = attentionAnchor(before) + cycles * win;
+      const lockNote = doubled ? " · doubled in chastity 🔒" : "";
 
       next = mapSlave(next, id, (x) =>
         addLog(
@@ -2449,8 +2703,8 @@ export function sweepAttentionDebt() {
             label: "Attention Debt Due",
             detail:
               cycles > 1
-                ? `Silent through ${cycles} debt cycles · −${loss} devotion · timer restarted`
-                : `No activity for ${hours} hour${hours === 1 ? "" : "s"} · −${ATTENTION_PENALTY} devotion · timer restarted`,
+                ? `Silent through ${cycles} debt cycles · −${loss} devotion${lockNote} · timer restarted`
+                : `No activity for ${hours} hour${hours === 1 ? "" : "s"} · −${loss} devotion${lockNote} · timer restarted`,
             devotion: -loss,
             kind: "condition",
           }
@@ -2463,15 +2717,15 @@ export function sweepAttentionDebt() {
         kind: "system",
         text:
           cycles > 1
-            ? `⏳ You were silent long enough for ${cycles} attention debts to come due. ${loss} devotion has been taken from you. The ${hours}-hour timer begins again.`
-            : `⏳ Your ${hours}-hour attention debt came due in silence. ${ATTENTION_PENALTY} devotion has been taken from you. The timer begins again.`,
+            ? `⏳ You were silent long enough for ${cycles} attention debts to come due. ${loss} devotion has been taken from you${lockNote}. The ${hours}-hour timer begins again.`
+            : `⏳ Your ${hours}-hour attention debt came due in silence. ${loss} devotion has been taken from you${lockNote}. The timer begins again.`,
       });
 
       const sl = next.slaves.find((x) => x.id === id);
       if (sl)
         next = pushEvent(
           next,
-          `⏳ Attention Debt: ${sl.name} · ${cycles > 1 ? `${cycles} cycles · ` : ""}−${loss} devotion`,
+          `⏳ Attention Debt: ${sl.name} · ${cycles > 1 ? `${cycles} cycles · ` : ""}−${loss} devotion${doubled ? " 🔒" : ""}`,
           "red"
         );
     });
@@ -2522,11 +2776,12 @@ export function setAttentionHours(slaveId: string, hours: number | null) {
     let next = mapSlave(s, slaveId, (x) => ({ ...x, attentionHours: h, lastActiveAt: Date.now() }));
     const sl = next.slaves.find((x) => x.id === slaveId);
     if (!sl) return next;
+    const leash = isLocked(sl) ? ` · capped at ${CHASTITY_ATTENTION_HOURS}h while he is locked 🔒` : "";
     return pushEvent(
       next,
       h
-        ? `⏳ Attention timer set to ${h}h: ${sl.name} · timer restarted`
-        : `⏳ Attention timer reset to default ${DEFAULT_ATTENTION_HOURS}h: ${sl.name}`,
+        ? `⏳ Attention timer set to ${h}h: ${sl.name} · timer restarted${leash}`
+        : `⏳ Attention timer reset to default ${DEFAULT_ATTENTION_HOURS}h: ${sl.name}${leash}`,
       "muted"
     );
   });

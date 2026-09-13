@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { money, type Msg } from "../lib/store";
+import Linkify from "./Linkify";
 
 /**
  * A plain chronological record of what was ordered and what became of it.
@@ -185,7 +186,9 @@ export default function CommandLog({
                     <span className="font-mono text-[9px] text-white/25">{ago(e.at)}</span>
                   </div>
                   {e.detail && (
-                    <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-white/45">{e.detail}</p>
+                    <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-white/45">
+                      <Linkify text={e.detail} />
+                    </p>
                   )}
                 </div>
               </li>

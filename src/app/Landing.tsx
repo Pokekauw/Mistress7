@@ -27,11 +27,11 @@ function Reveal({ children, delay = 0, className = "" }: { children: React.React
 /* ---------------- data ---------------- */
 const POWERS = [
   { i: "⛓️", t: "Penance & Decree", d: "Skriv en ordre eller en straf, vælg blandt færdige formuleringer, og send den som et dekret han ikke kan overse." },
-  { i: "🔒", t: "Gag & Chastity", d: "Justerbare nedtællinger fra 10 minutter til 24 timer. En gagget sub kan bogstaveligt talt ikke skrive til dig." },
+  { i: "🔒", t: "Gag & Chastity", d: "Justerbare nedtællinger fra 10 minutter til 24 timer. En gagget sub kan bogstavelt talt ikke skrive til dig — og en sub i chastity er på dobbelt straf med kun 6 timer til at reagere." },
   { i: "📍", t: "Live Location Ping", d: "Kræv check-in med tidsfrist. Overskrider han den, straffer systemet ham automatisk — også mens du sover." },
   { i: "📸", t: "Proof of Compliance", d: "Han uploader billedbevis på udført straf. Du dømmer med ét tryk: accepteret eller afvist." },
   { i: "🗝️", t: "Nøgler & Revoke", d: "Udsted signerede nøgler bundet til navn og tier. Inddrag adgangen, og døren lukker for ham med det samme." },
-  { i: "👑", t: "Devotion & Rang", d: "Hver handling skriver til hans profil. Devotion, strikes, ledger og rang — hele hans historik på ét kort." },
+  { i: "👑", t: "Devotion & Rang", d: "Hver handling skriver til hans profil. Devotion, strikes, ledger og rang — hele hans historik på ét kort. Du bestemmer selv, hvad de enkelte strikes skal koste." },
 ];
 
 const ICONS: Record<string, string> = { chamber: "🖤", house: "👑", dynasty: "⛓️" };
