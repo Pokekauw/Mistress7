@@ -5,6 +5,7 @@ import {
   attentionDeadline,
   attentionWindowHours,
   avatarFor,
+  attachmentUrl,
   bgStyle,
   chatBgFor,
   CHASTITY_ATTENTION_HOURS,
@@ -613,8 +614,8 @@ export default function SlaveDrawer({
                       {p.verdict === "pending" ? "Awaiting Judgement" : p.verdict}
                     </span>
                   </div>
-                  {p.file?.url ? (
-                    <img src={p.file.url} alt="proof" loading="lazy" className="max-h-48 w-full object-cover" />
+                  {attachmentUrl(p) ? (
+                    <img src={attachmentUrl(p)!} alt="proof" loading="lazy" className="max-h-48 w-full object-cover" />
                   ) : (
                     <div className="px-3 py-4 text-[12px] text-white/50">📎 {p.file?.name || "file"}</div>
                   )}

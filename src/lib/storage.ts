@@ -1,11 +1,36 @@
 import { deleteObject, getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { HOUSE_ID, isFirebase, storage } from "../firebase";
+import { HOUSE_ID, isFirebase, storage, STORAGE_BUCKET_NAME } from "../firebase";
 
 export const isRemote = isFirebase;
 export const MEDIA_BUCKET = "dominion-media";
 
 /** Firestore documents cap at 1 MiB; base64 inflates ~33%, so stay well under. */
 export const INLINE_CEILING = 320_000;
+
+/* ------------------------------------------------------------------ *
+ *  bucket sanity                                                      *
+ * ------------------------------------------------------------------ */
+
+/**
+ * The bucket the SDK instance will actually address. Empty means every
+ * request would be built as `/v0/b//o/…`, which can only fail — so it is
+ * checked before an upload is attempted, never after.
+ */
+export function storageBucket(): string {
+  if (!storage) return "";
+  try {
+    /* `ref(...).bucket` is the public read-back of the bucket this instance
+       will address; the instance itself keeps it in a private field. */
+    return ref(storage, "_health").bucket || STORAGE_BUCKET_NAME || "";
+  } catch {
+    return STORAGE_BUCKET_NAME || "";
+  }
+}
+
+/** true only when a real bucket is behind the Storage instance */
+export function storageUsable(): boolean {
+  return Boolean(isFirebase && storage && storageBucket());
+}
 
 /* ------------------------------------------------------------------ *
  *  compression                                                        *
@@ -135,8 +160,8 @@ export { isFail as isUploadFail };
  * The single upload path for every image in the app.
  *
  * 1. compress in the browser
- * 2. push the bytes straight to Firebase Storage
- * 3. hand back only the short URL — never the file itself
+ * 2. `uploadBytes(ref(storage, path), file)` — bytes straight to Storage
+ * 3. `getDownloadURL(ref)` — and ONLY that short URL is handed back
  *
  * Nothing large is ever written into a Firestore document, which is what
  * used to make ~1.4 MB photos fail against the 1 MiB document limit.
@@ -150,27 +175,42 @@ export async function uploadImage(
   const compressed = isImage ? await compressImage(file, opts) : null;
   const payload: Blob = compressed || file;
 
+  /* ---- remote: Firebase Storage ---- */
   if (isFirebase && storage) {
-    try {
-      const ext = isImage ? "jpg" : (file.name.split(".").pop() || "bin").toLowerCase().slice(0, 5);
-      const path = `${MEDIA_BUCKET}/${HOUSE_ID}/${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const r = ref(storage, path);
-      await uploadBytes(r, payload, {
-        contentType: isImage ? "image/jpeg" : file.type || "application/octet-stream",
-        cacheControl: "public,max-age=31536000",
-      });
-      const url = await getDownloadURL(r);
-      return { url, path, inline: false, bytes: payload.size };
-    } catch (e) {
-      const code = (e as { code?: string })?.code || "";
-      console.warn(`[dominion] storage upload failed (${code || "unknown"})`, e);
-      /* fall through to inline only if it is small enough to be safe */
-      if (payload.size > INLINE_CEILING) {
-        return {
-          error: code.includes("unauthorized")
-            ? "Storage rejected the upload. Publish storage.rules — see SETUP.md."
-            : "Upload failed and the file is too large to store inline.",
-        };
+    if (!storageUsable()) {
+      console.error(
+        `[dominion] Storage is initialised without a bucket — refusing to upload to /v0/b//o/. ` +
+          `Expected "${STORAGE_BUCKET_NAME}"; set VITE_FIREBASE_STORAGE_BUCKET and redeploy.`
+      );
+    } else {
+      try {
+        const ext = isImage ? "jpg" : (file.name.split(".").pop() || "bin").toLowerCase().slice(0, 5);
+        const path = `${MEDIA_BUCKET}/${HOUSE_ID}/${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+        /* 2 — upload the bytes. ref() is resolved against the explicit bucket. */
+        const r = ref(storage, path);
+        await uploadBytes(r, payload, {
+          contentType: isImage ? "image/jpeg" : file.type || "application/octet-stream",
+          cacheControl: "public,max-age=31536000",
+        });
+
+        /* 3 — ask Storage for the public URL of what we just wrote */
+        const url = await getDownloadURL(r);
+
+        if (!url || !/^https?:\/\//i.test(url)) {
+          console.error(`[dominion] getDownloadURL returned "${url}" for ${path}`);
+          return { error: "The upload landed but Storage returned no usable URL. Try again." };
+        }
+
+        return { url, path, inline: false, bytes: payload.size };
+      } catch (e) {
+        const code = (e as { code?: string })?.code || "";
+        console.warn(`[dominion] storage upload failed (${code || "unknown"}) · bucket ${storageBucket()}`, e);
+
+        /* fall through to inline only if it is small enough to be safe */
+        if (payload.size > INLINE_CEILING) {
+          return { error: explainUploadError(code) };
+        }
       }
     }
   }
@@ -186,6 +226,24 @@ export async function uploadImage(
   }
 }
 
+/**
+ * Storage error codes are cryptic and a rules rejection looks identical to a
+ * network failure from the UI. Say which one it was, and what to do.
+ */
+function explainUploadError(code: string): string {
+  if (code.includes("unauthorized") || code.includes("permission-denied"))
+    return "Storage rejected the upload (403). Publish storage.rules — see SETUP.md §1.";
+  if (code.includes("quota-exceeded"))
+    return "Storage quota is full. Free space or upgrade the bucket's plan.";
+  if (code.includes("unauthenticated"))
+    return "Storage needs a signed-in user before it accepts this upload. Check storage.rules.";
+  if (code.includes("retry-limit-exceeded") || code.includes("network") || code.includes("unavailable"))
+    return "The upload could not reach Firebase Storage. Check the connection and try again.";
+  if (code.includes("invalid-") || code.includes("cannot-slice-blob"))
+    return "That file could not be uploaded in this format. Try another image.";
+  return "Upload failed and the file is too large to store inline.";
+}
+
 /** legacy shim used by MediaComposer */
 export async function uploadMedia(file: File): Promise<Uploaded | null> {
   const r = await uploadImage(file, "media");
@@ -193,10 +251,13 @@ export async function uploadMedia(file: File): Promise<Uploaded | null> {
 }
 
 export async function deleteMedia(path: string | null) {
-  if (!path || !isFirebase || !storage) return;
+  if (!path || !storageUsable() || !storage) return;
   try {
     await deleteObject(ref(storage, path));
   } catch {
     /* ignore */
   }
 }
+
+/** true for a Storage/remote URL — never for an inline `data:` URL */
+export const isRemoteUrl = (u?: string | null): boolean => Boolean(u && /^https?:\/\//i.test(u));

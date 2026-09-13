@@ -11,6 +11,7 @@ import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import Linkify from "../components/Linkify";
 import {
+  attachmentUrl,
   avatarFor,
   bgStyle,
   chatBgFor,
@@ -614,7 +615,9 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                 </div>
               );
             if (m.kind === "media") return <MediaBubble key={m.id} m={m} slaveId={slave.id} side="left" />;
-            if (m.kind === "proof")
+            if (m.kind === "proof") {
+              /* msg.imageUrl first — the Storage URL — then the nested file.url */
+              const proofUrl = attachmentUrl(m);
               return (
                 <div key={m.id} className="rounded-xl border border-violet-400/30 bg-violet-500/8 p-3">
                   <div className="flex items-center gap-2">
@@ -628,9 +631,9 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                       {m.verdict === "pending" ? "awaiting judgement" : m.verdict}
                     </span>
                   </div>
-                  {m.file?.url ? (
+                  {proofUrl ? (
                     <img
-                      src={m.file.url}
+                      src={proofUrl}
                       alt="proof"
                       loading="lazy"
                       className="mt-2 max-h-56 w-full rounded-lg border border-white/10 object-cover"
@@ -651,6 +654,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                   </div>
                 </div>
               );
+            }
             const mine = m.from === "sub";
             return (
               <div key={m.id} className={`flex flex-col ${mine ? "items-end" : "items-start"}`}>
