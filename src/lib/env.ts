@@ -15,12 +15,42 @@ const env = import.meta.env;
 
 const read = (v?: string) => (v ?? "").trim();
 
+/* ------------------------------------------------------------------ *
+ *  Storage bucket                                                     *
+ *                                                                     *
+ *  An empty bucket is not a harmless default. `getStorage(app)` still  *
+ *  builds a request when `storageBucket` is "", and that request goes  *
+ *  to `/v0/b//o/` — a path with no bucket in it, which can only ever   *
+ *  fail (400/404, or a CORS error that hides the real cause).          *
+ *                                                                     *
+ *  So the bucket is resolved ONCE, here, with the house bucket as the  *
+ *  fallback instead of "". Everything downstream — firebase.ts,        *
+ *  getStorage(app, bucket), the diagnostics — reads the same value.    *
+ * ------------------------------------------------------------------ */
+
+/** the bucket this house uploads to when VITE_FIREBASE_STORAGE_BUCKET is absent */
+export const DEFAULT_STORAGE_BUCKET = "house-of-dom.firebasestorage.app";
+
+/**
+ * Accept the forms people actually paste into an env field:
+ * `gs://house-of-dom.firebasestorage.app`, the bare name, a copy of the
+ * browser URL, stray quotes, whitespace or a trailing slash.
+ */
+export function normaliseBucket(raw?: string): string {
+  let b = read(raw).replace(/^["']|["']$/g, "");
+  if (!b) return "";
+  b = b.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ""); // gs://, https://, http://
+  b = b.split(/[/?#]/)[0]; // a bucket name never contains a path, query or hash
+  return b;
+}
+
 export const CLIENT_ENV = {
   firebase: {
     apiKey: read(env.VITE_FIREBASE_API_KEY),
     authDomain: read(env.VITE_FIREBASE_AUTH_DOMAIN),
     projectId: read(env.VITE_FIREBASE_PROJECT_ID),
-    storageBucket: read(env.VITE_FIREBASE_STORAGE_BUCKET),
+    /** never "" — see DEFAULT_STORAGE_BUCKET above */
+    storageBucket: normaliseBucket(env.VITE_FIREBASE_STORAGE_BUCKET) || DEFAULT_STORAGE_BUCKET,
     messagingSenderId: read(env.VITE_FIREBASE_MESSAGING_SENDER_ID),
     appId: read(env.VITE_FIREBASE_APP_ID),
     measurementId: read(env.VITE_FIREBASE_MEASUREMENT_ID),
@@ -30,6 +60,15 @@ export const CLIENT_ENV = {
   telegramRelay: read(env.VITE_TELEGRAM_RELAY_URL) || "/api/telegram/send",
   vapid: read(env.VITE_VAPID_PUBLIC_KEY),
 } as const;
+
+/**
+ * The single source of truth for "which bucket do we upload to?".
+ * Passed explicitly to `getStorage(app, STORAGE_BUCKET)` in firebase.ts.
+ */
+export const STORAGE_BUCKET = CLIENT_ENV.firebase.storageBucket;
+
+/** true when the bucket came from the fallback rather than the environment */
+export const BUCKET_IS_DEFAULT = !normaliseBucket(env.VITE_FIREBASE_STORAGE_BUCKET);
 
 /** the two values Firestore genuinely cannot start without */
 const FIREBASE_REQUIRED = ["VITE_FIREBASE_API_KEY", "VITE_FIREBASE_PROJECT_ID"] as const;
@@ -81,6 +120,13 @@ export function reportConfig() {
       "color:#34d399"
     );
   }
+
+  /* The bucket is printed on every boot, because "/v0/b//o/" in the network
+     tab is otherwise the only clue that it resolved to nothing. */
+  console.info(
+    `%c[dominion] Storage bucket · ${STORAGE_BUCKET}${BUCKET_IS_DEFAULT ? " (default — set VITE_FIREBASE_STORAGE_BUCKET to override)" : " (from VITE_FIREBASE_STORAGE_BUCKET)"}`,
+    BUCKET_IS_DEFAULT ? "color:#9ca3af" : "color:#34d399"
+  );
 
   if (!CLIENT_ENV.telegramBot) {
     console.info(

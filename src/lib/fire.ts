@@ -9,6 +9,7 @@ import {
 } from "firebase/firestore";
 import { db, HOUSE_ID, isFirebase } from "../firebase";
 import { WRITER_ID, type Msg, type Slave, type State } from "./store";
+import { isRemoteUrl } from "./storage";
 
 /* ------------------------------------------------------------------ */
 /*  paths                                                              */
@@ -26,6 +27,21 @@ const sub = (name: string) => collection(db!, "houses", HOUSE_ID, name);
 /** Firestore rejects `undefined` — strip it everywhere. */
 function clean<T>(v: T): T {
   return JSON.parse(JSON.stringify(v, (_k, val) => (val === undefined ? null : val))) as T;
+}
+
+/**
+ * The first genuine Firebase Storage URL on a message.
+ *
+ * `imageUrl` is written by the upload flow; `media.url` / `file.url` are the
+ * older nested fields, kept as fallbacks for documents written before it.
+ * Inline `data:` URLs are deliberately excluded — they are the thing that
+ * used to push the house document past Firestore's 1 MiB cap.
+ */
+function attachmentUrlOf(m: Msg): string | null {
+  for (const u of [m.imageUrl, m.media?.url, m.file?.url]) {
+    if (isRemoteUrl(u)) return u as string;
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -122,6 +138,8 @@ function slimForFirestore(s: State): State {
       const next = { ...m };
       if (isHeavy(next.file?.url)) next.file = { ...next.file!, url: null };
       if (next.media && isHeavy(next.media.url)) next.media = { ...next.media, url: "" };
+      /* imageUrl mirrors the same bytes — it has to go too, or the trim is moot */
+      if (isHeavy(next.imageUrl)) next.imageUrl = null;
       return next;
     }),
   };
@@ -259,9 +277,17 @@ export async function mirrorCollections(s: State) {
         doc(sub("decrees"), m.id),
         clean({
           ...rest,
+          /**
+           * THE attachment field on the message document: exactly the URL
+           * getDownloadURL() returned after uploadBytes(). Written last so it
+           * wins over whatever `rest` carried, and never a data: URL.
+           */
+          imageUrl: attachmentUrlOf(m),
           hasFile: Boolean(file),
           fileName: file?.name ?? null,
-          mediaUrl: media && !String(media.url).startsWith("data:") ? media.url : null,
+          fileUrl: isRemoteUrl(file?.url) ? file!.url : null,
+          /* kept so anything already reading the old name still works */
+          mediaUrl: isRemoteUrl(media?.url) ? media!.url : null,
           mediaLock: media?.lock ?? null,
           mediaUnlocked: media?.unlocked ?? null,
         }),

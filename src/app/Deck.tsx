@@ -35,6 +35,7 @@ import {
   rotateAccessCode,
   setAccess,
   type AccessState,
+  attachmentUrl,
   COMMANDS,
   DECREE_PRESETS,
   DURATIONS,
@@ -479,7 +480,9 @@ function Thread({ slave }: { slave: Slave }) {
               </div>
             );
           if (m.kind === "media") return <MediaBubble key={m.id} m={m} side="right" />;
-          if (m.kind === "proof")
+          if (m.kind === "proof") {
+            /* msg.imageUrl first — the Storage URL — then the nested file.url */
+            const proofUrl = attachmentUrl(m);
             return (
               <div key={m.id} className="rounded-xl border border-violet-400/30 bg-violet-500/8 p-3">
                 <div className="flex items-center gap-2">
@@ -493,12 +496,12 @@ function Thread({ slave }: { slave: Slave }) {
                     {m.verdict === "pending" ? "Awaiting Judgement" : m.verdict}
                   </span>
                 </div>
-                {m.file?.url ? (
+                {proofUrl ? (
                   <img
-                    src={m.file.url}
+                    src={proofUrl}
                     alt="proof"
                     loading="lazy"
-                    onClick={() => setLightbox(m.file!.url)}
+                    onClick={() => setLightbox(proofUrl)}
                     className="mt-2 max-h-52 w-full cursor-zoom-in rounded-lg border border-white/10 object-cover"
                   />
                 ) : (
@@ -529,6 +532,7 @@ function Thread({ slave }: { slave: Slave }) {
                 )}
               </div>
             );
+          }
           const mine = m.from === "mistress";
           return (
             <div key={m.id} className={`flex flex-col ${mine ? "items-end" : "items-start"}`}>

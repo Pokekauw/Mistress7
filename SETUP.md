@@ -33,9 +33,39 @@ Then **Build → Storage → Get started** for media rewards 👠.
 Publish the rules:
 
 - Firestore → **Rules** → paste [`firestore.rules`](firestore.rules)
-- Storage → **Rules** → paste [`storage.rules`](storage.rules)
+- Storage → **Rules** → paste [`storage.rules`](storage.rules). Keep the
+  `{file=**}` wildcard: uploads land in a *folder* segment
+  (`dominion-media/{houseId}/media/…`), and a single-segment `{file}` matches
+  nothing at all — which rejects every upload with a 403 that looks like a
+  configuration mystery.
 
 `.env` is already populated with the `house-of-dom` keys.
+
+### The Storage bucket ⚠️
+
+The bucket is **`house-of-dom.firebasestorage.app`**, and it is named explicitly
+in code — `getStorage(app, STORAGE_BUCKET)` in [`src/firebase.ts`](src/firebase.ts):
+
+```ts
+_storage = getStorage(_app, STORAGE_BUCKET);   // never getStorage(_app) alone
+```
+
+Why that matters: `getStorage(app)` on its own reads `app.options.storageBucket`,
+and when `VITE_FIREBASE_STORAGE_BUCKET` was never set at build time that value is
+`""` — which the SDK accepts as a bucket *name*. Every request then goes to
+
+```
+https://firebasestorage.googleapis.com/v0/b//o/…      ← empty bucket segment
+```
+
+and fails with a 400 that the browser reports as an opaque CORS error. Passing the
+bucket explicitly makes that state unreachable. `VITE_FIREBASE_STORAGE_BUCKET`
+still wins when it is set (a `gs://…` prefix, a pasted URL or a trailing slash are
+all normalised first — see `normaliseBucket()` in `src/lib/env.ts`), and the
+resolved bucket is printed to the console on every boot.
+
+> **Vercel:** `VITE_` values are inlined at *build* time. Setting one after a build
+> changes nothing until you redeploy.
 
 ## 2 · Data structure
 
@@ -70,6 +100,9 @@ houses/{houseId}
   │
   ├─ punishments/{logId}   discipline record — Mistress-write only
   ├─ decrees/{msgId}       decrees, penances, proofs, check-ins
+  │    imageUrl           📸 the Storage download URL of the attachment
+  │    fileName/fileUrl   proof attachment name + URL
+  │    mediaUrl           older name for the same URL (kept for compatibility)
   ├─ locations/{id}        📍 pins
   └─ pushSubscriptions/    devices that can receive push
 ```
@@ -101,14 +134,31 @@ Every image in the app goes through one path — `uploadImage()` in `src/lib/sto
 1. **Compressed in the browser.** Downscaled to a max edge, then quality is
    stepped down until the result fits a target size. A 1.4 MB photo typically
    lands under 200 KB before anything leaves the device.
-2. **Uploaded straight to Firebase Storage** under
+2. **Uploaded with `uploadBytes(ref(storage, path), file)`** into
    `dominion-media/{houseId}/{proof|media|avatars|backdrops}/`.
-3. **Only the short download URL is stored** in the chat document.
+3. **`getDownloadURL()` is called on the very same ref**, and only that short
+   URL is handed back to the caller.
+4. **The URL is saved as `imageUrl`** — on the message itself (`Msg.imageUrl`,
+   written by `sendMedia()` and `submitProof()`) and on the Firestore message
+   document `houses/{houseId}/decrees/{msgId}.imageUrl` (written by
+   `mirrorCollections()` in `src/lib/fire.ts`).
+
+```ts
+const r = ref(storage, path);                 // dominion-media/{houseId}/media/…
+await uploadBytes(r, payload, { contentType, cacheControl });
+const url = await getDownloadURL(r);          // ← exactly this string is stored
+```
+
+The UI reads it back through `attachmentUrl(msg)`, which prefers `imageUrl` and
+falls back to the older nested `media.url` / `file.url`, so messages written
+before the field existed still render.
 
 > **Why this matters.** Firestore documents are capped at **1 MiB**, and base64
 > inflates bytes by ~33%. Proof images used to be inlined as data URLs directly
 > into the house document, so a single large photo could exceed the cap and
-> silently break *every* subsequent write. Storage keeps documents tiny.
+> silently break *every* subsequent write. Storage keeps documents tiny — and
+> `attachmentUrlOf()` in `fire.ts` refuses to write a `data:` URL into the
+> mirrored message document for the same reason.
 
 `pushHouse()` also carries a safety net: if the document ever approaches
 800 KB it strips oversized inline payloads and trims the oldest messages, so a

@@ -138,6 +138,13 @@ export type Msg = {
   demandId?: string;
   /** proof attachment — `url` is a Storage link, never raw file bytes */
   file?: { name: string; url: string | null; mime: string; size: number; path?: string | null };
+  /**
+   * The attachment's public URL — exactly what `getDownloadURL()` returned
+   * after `uploadBytes()` (a Storage link when remote, a small `data:` URL
+   * in local mode). It lives on the message itself so the Firestore document
+   * carries the image reference without anyone having to walk `media`/`file`.
+   */
+  imageUrl?: string | null;
   verdict?: "pending" | "accepted" | "rejected";
   /* location */
   deadline?: number;
@@ -159,6 +166,20 @@ export type Msg = {
 };
 
 export type { Invite } from "./invites";
+
+/**
+ * The URL a message's attachment should be rendered from.
+ *
+ * `imageUrl` is authoritative — it is verbatim what `getDownloadURL()`
+ * returned after `uploadBytes()`. The nested `media.url` / `file.url` stay as
+ * fallbacks so documents written before the field existed still display.
+ */
+export function attachmentUrl(m: Msg): string | null {
+  const found = [m.imageUrl, m.media?.url, m.file?.url].find(
+    (u): u is string => typeof u === "string" && u.length > 0
+  );
+  return found ?? null;
+}
 
 /**
  * What each kind of strike costs in devotion. The defaults are the values this
@@ -2359,6 +2380,8 @@ export function sendMedia(
         kind: "media",
         title: media.lock === "free" ? "Reward Granted" : "Locked Teaser",
         text: caption,
+        /* the Storage download URL, straight from getDownloadURL() */
+        imageUrl: media.url || null,
         media: { ...media, unlocked: media.lock === "free", views: 0, burned: false },
       });
       next = mapSlave(next, id, (x) => ({ ...x, lastTouched: Date.now() }));
@@ -2452,6 +2475,8 @@ export function viewMedia(msgId: string, burnNow = false) {
       m.id === msgId && m.media
         ? {
             ...m,
+            /* a burned reward leaves no reachable URL behind — neither field */
+            imageUrl: burnNow && m.media.burn ? null : (m.imageUrl ?? m.media.url ?? null),
             media: {
               ...m.media,
               views: m.media.views + (burnNow ? 0 : 1),
@@ -2479,6 +2504,8 @@ export function submitProof(
         title: "Proof Submitted",
         text: note || "Proof of compliance submitted for judgement.",
         file,
+        /* the Storage download URL of the proof image */
+        imageUrl: file.url || null,
         verdict: "pending",
       }),
       slaveId,

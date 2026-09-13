@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { money, unlockMedia, viewMedia, type Msg } from "../lib/store";
+import { attachmentUrl, money, unlockMedia, viewMedia, type Msg } from "../lib/store";
 import { ReadTicks, Stamp } from "./MessageMeta";
 import Linkify from "./Linkify";
 
@@ -22,6 +22,8 @@ export default function MediaBubble({
   const locked = !media.unlocked;
   const burned = media.burned;
   const isImage = (media.mime || "").startsWith("image/");
+  /** the Storage download URL (msg.imageUrl), falling back to the nested field */
+  const url = attachmentUrl(m);
 
   const lockLabel =
     media.lock === "tribute" ? `${money(media.price || 0)} 💰` : media.lock === "devotion" ? `♥ ${media.need}` : "";
@@ -100,13 +102,13 @@ export default function MediaBubble({
                 </div>
               </div>
             </button>
-          ) : isImage && media.url ? (
+          ) : isImage && url ? (
             <button onClick={open} className="block w-full">
-              <img src={media.url} alt={media.name} className="max-h-72 w-full cursor-zoom-in object-cover" />
+              <img src={url} alt={media.name} className="max-h-72 w-full cursor-zoom-in object-cover" />
             </button>
           ) : (
             <a
-              href={media.url || undefined}
+              href={url || undefined}
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-3 px-4 py-5 transition hover:bg-white/[0.03]"
@@ -152,9 +154,9 @@ export default function MediaBubble({
         )}
       </div>
 
-      {zoom && media.url && (
+      {zoom && url && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/96 p-4" onClick={close}>
-          <img src={media.url} alt={media.name} className="max-h-full max-w-full rounded-xl object-contain" />
+          <img src={url} alt={media.name} className="max-h-full max-w-full rounded-xl object-contain" />
           {media.burn && (
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-rose-400/40 bg-rose-950/70 px-4 py-2 text-[11.5px] text-rose-100">
               🔥 This vanishes when you close it
