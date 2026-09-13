@@ -15,7 +15,14 @@ export const firebaseConfig = {
   apiKey: CLIENT_ENV.firebase.apiKey,
   authDomain: CLIENT_ENV.firebase.authDomain,
   projectId: CLIENT_ENV.firebase.projectId,
-  storageBucket: CLIENT_ENV.firebase.storageBucket,
+  // Never leave the bucket empty — the Storage SDK then emits /v0/b//o
+  // URLs (404/CORS). Prefer an explicit env value, otherwise derive the
+  // default bucket from the project id.
+  storageBucket:
+    CLIENT_ENV.firebase.storageBucket ||
+    (CLIENT_ENV.firebase.projectId
+      ? `${CLIENT_ENV.firebase.projectId}.appspot.com`
+      : ""),
   messagingSenderId: CLIENT_ENV.firebase.messagingSenderId,
   appId: CLIENT_ENV.firebase.appId,
   measurementId: CLIENT_ENV.firebase.measurementId,
