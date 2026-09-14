@@ -12,7 +12,7 @@ import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/Message
 import Linkify from "../components/Linkify";
 import ChatInput, { insertAtCaret } from "../components/ChatInput";
 import EmojiPanel from "../components/EmojiPanel";
-import { SLAVE_EMOJI_GROUPS } from "../lib/emojis";
+import { SLAVE_EMOJI_ALLOWED, SLAVE_EMOJI_GROUPS } from "../lib/emojis";
 import {
   attachmentUrl,
   avatarFor,
@@ -733,7 +733,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
               title="Your emojis"
               hint="she keeps her favourites. this is only what a slave may send — enough to please her"
               groups={SLAVE_EMOJI_GROUPS}
-              usuals={slave.emojiUsuals}
+              usuals={(slave.emojiUsuals || []).filter((e) => SLAVE_EMOJI_ALLOWED.has(e))}
               onPick={insertSnippet}
               onClose={() => setEmojiOpen(false)}
             />
