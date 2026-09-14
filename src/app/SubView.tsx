@@ -10,6 +10,9 @@ import TelegramInline from "../components/TelegramInline";
 import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import Linkify from "../components/Linkify";
+import ChatInput, { insertAtCaret } from "../components/ChatInput";
+import EmojiPanel from "../components/EmojiPanel";
+import { SLAVE_EMOJI_GROUPS } from "../lib/emojis";
 import {
   attachmentUrl,
   avatarFor,
@@ -21,6 +24,7 @@ import {
   HARD_LIMIT_OPTIONS,
   isTyping,
   markThreadRead,
+  noteSubEmojiUse,
   openLocReq,
   reverseGeocode,
   setFixPlace,
@@ -56,6 +60,9 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
     [allMsgs, slave]
   );
   const [text, setText] = useState("");
+  /* his emoji drawer — allowed emojis only, never her favourites */
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
   const [sheet, setSheet] = useState<
@@ -211,6 +218,25 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
       return;
     }
     setText("");
+    setEmojiOpen(false);
+  };
+
+  /** a pick from his drawer lands at the caret — and only if he may speak */
+  const insertSnippet = (snippet: string) => {
+    if (gagged) {
+      setErr(`🤐 you are gagged — ${timeLeft(slave.gagUntil - Date.now())} remaining. She decides when you may speak.`);
+      setTimeout(() => setErr(""), 2600);
+      return;
+    }
+    const box = inputRef.current;
+    const { next, caret } = insertAtCaret(text, snippet, box?.selectionStart ?? text.length, box?.selectionEnd ?? text.length);
+    setText(next);
+    setTyping(slave.id, "sub", next.trim().length > 0);
+    noteSubEmojiUse(slave.id, snippet);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
   };
 
   const pay = (amount: number, demandId?: string) => {
@@ -482,7 +508,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
             {msgs.map((m) => {
             if (m.kind === "system" || m.kind === "refusal")
               return (
-                <div key={m.id} className="rounded-lg border-l-2 border-white/20 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white/55">
+                <div key={m.id} className="whitespace-pre-wrap rounded-lg border-l-2 border-white/20 bg-white/[0.03] px-3 py-2 text-[12px] leading-relaxed text-white/55">
                   <Linkify text={m.text} />
                   <div className="mt-1">
                     <Stamp at={m.time} className="text-white/25" />
@@ -508,7 +534,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                     </div>
                   )}
                   <div
-                    className={`text-[13px] leading-snug italic ${m.title ? "mt-1" : ""} ${
+                    className={`text-[13px] leading-snug whitespace-pre-wrap italic ${m.title ? "mt-1" : ""} ${
                       m.from === "mistress" ? "text-brass-soft/90" : "text-white/55"
                     }`}
                   >
@@ -644,7 +670,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                     </div>
                   )}
                   {m.text && (
-                    <p className="mt-2 text-[12.5px] text-white/70">
+                    <p className="mt-2 whitespace-pre-wrap text-[12.5px] text-white/70">
                       <Linkify text={m.text} />
                     </p>
                   )}
@@ -661,7 +687,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
                 <div className={`flex w-full items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
                   {!mine && <Avatar size={30} src={dungeon.avatarUrl} />}
                   <div
-                    className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug [overflow-wrap:anywhere] ${
+                    className={`max-w-[76%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug [overflow-wrap:anywhere] ${
                       mine
                         ? "rounded-br-md border border-white/10 bg-white/[0.06] text-white/80"
                         : "font-display rounded-bl-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
@@ -701,27 +727,57 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
         <TelegramInline slave={slave} />
 
         {/* composer — right under the chat so writing and reading stay together */}
-        <div className="mt-2 flex gap-2">
-          <input
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              if (!gagged) setTyping(slave.id, "sub", e.target.value.trim().length > 0);
-            }}
-            onBlur={() => setTyping(slave.id, "sub", false)}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              send();
-              setTyping(slave.id, "sub", false);
-            }}
-            placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...`}
-            className={`flex-1 rounded-full border px-4 py-3 text-[15px] outline-none transition ${
-              gagged ? "border-amber-400/50 bg-amber-500/10 text-amber-100 placeholder:text-amber-200/60" : "border-white/12 bg-black/40 focus:border-brass/50"
-            }`}
-          />
-          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
-            Send
-          </button>
+        <div className="mt-2">
+          {emojiOpen && (
+            <EmojiPanel
+              title="Your emojis"
+              hint="she keeps her favourites. this is only what a slave may send — enough to please her"
+              groups={SLAVE_EMOJI_GROUPS}
+              usuals={slave.emojiUsuals}
+              onPick={insertSnippet}
+              onClose={() => setEmojiOpen(false)}
+            />
+          )}
+
+          <div className="flex items-end gap-2">
+            <ChatInput
+              ref={inputRef}
+              value={text}
+              onChange={(v) => {
+                setText(v);
+                if (!gagged) setTyping(slave.id, "sub", v.trim().length > 0);
+              }}
+              onBlur={() => setTyping(slave.id, "sub", false)}
+              onSubmit={() => {
+                send();
+                setTyping(slave.id, "sub", false);
+              }}
+              placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...  (⇧⏎ new paragraph)`}
+              className={`border px-4 py-3 text-[15px] ${
+                gagged
+                  ? "border-amber-400/50 bg-amber-500/10 text-amber-100 placeholder:text-amber-200/60"
+                  : "border-white/12 bg-black/40 focus:border-brass/50"
+              }`}
+            />
+            <button
+              onClick={() => setEmojiOpen((v) => !v)}
+              disabled={gagged}
+              title={gagged ? "🤐 gagged — no emojis while you cannot speak" : "Emoji — only what you are allowed"}
+              className={`shrink-0 rounded-3xl border px-3 py-3 text-[16px] transition disabled:opacity-40 ${
+                emojiOpen && !gagged
+                  ? "border-brass/65 bg-brass/18 text-brass-soft"
+                  : "border-white/12 bg-black/35 text-white/65 hover:border-brass/45 hover:text-brass-soft"
+              }`}
+            >
+              😊
+            </button>
+            <button
+              onClick={send}
+              className="shrink-0 rounded-3xl border border-brass/45 bg-brass/15 px-5 py-3 text-[13px] text-brass-soft"
+            >
+              Send
+            </button>
+          </div>
         </div>
 
         {/* rituals — press as often as he likes; each button pays ♥ once a day */}

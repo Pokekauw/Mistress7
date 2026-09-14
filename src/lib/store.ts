@@ -11,6 +11,7 @@ import {
 } from "./invites";
 import { HOUSE_ID, isFirebase } from "../firebase";
 import { isUploadFail, uploadImage } from "./storage";
+import { SLAVE_EMOJI_ALLOWED, SLAVE_EMOJI_USUALS_MAX } from "./emojis";
 import { canAddSlave, DEFAULT_PLAN, planHas, planOf, planRequiredFor, type Feature, type PlanId } from "./plans";
 import {
   buildAlert,
@@ -61,6 +62,12 @@ export type Slave = {
   /* ---- presentation (Mistress may override at will) ---- */
   avatarUrl?: string; // his portrait; falls back to the house default
   chatBg?: ChatBg; // his chat backdrop; falls back to the house backdrop
+  /**
+   * 🎭 The few emojis he keeps reaching for, most-used first — his own row in
+   * the emoji drawer. NOT favourites: a slave has none of those. These are
+   * only ever drawn from his allowed set (see lib/emojis).
+   */
+  emojiUsuals?: string[];
   /* ---- telegram delivery ---- */
   telegram?: TelegramLink; // linked chat, once he has messaged the bot
   telegramCode?: string; // one-time code awaiting use
@@ -1438,6 +1445,22 @@ export function subSay(slaveId: string, text: string): { ok: boolean; error?: st
     return { ok: false, error: `🤐 You are gagged. ${timeLeft(s.gagUntil - Date.now())} remaining. Do not test her.` };
   update((st) => mapSlave(pushMsg(st, { slaveId, from: "sub", kind: "text", text }), slaveId, touchActivity));
   return { ok: true };
+}
+
+/**
+ * 🎭 He picked one of his allowed emojis. No favourites exist for a slave —
+ * she has those — but the handful he uses over and over are remembered and
+ * offered to him first, so his drawer is tailored to him. Anything outside
+ * the set he is permitted is refused, so a stale entry cannot smuggle in a 👑.
+ */
+export function noteSubEmojiUse(slaveId: string, emoji: string) {
+  if (!SLAVE_EMOJI_ALLOWED.has(emoji)) return;
+  update((s) =>
+    mapSlave(s, slaveId, (x) => ({
+      ...x,
+      emojiUsuals: [emoji, ...(x.emojiUsuals || []).filter((e) => e !== emoji)].slice(0, SLAVE_EMOJI_USUALS_MAX),
+    }))
+  );
 }
 
 export const RITUALS = [
