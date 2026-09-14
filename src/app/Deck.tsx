@@ -15,6 +15,9 @@ import SlaveDrawer from "../components/SlaveDrawer";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import StrikeModal from "../components/StrikeModal";
 import Linkify from "../components/Linkify";
+import ChatInput, { insertAtCaret } from "../components/ChatInput";
+import EmojiPanel from "../components/EmojiPanel";
+import { MISTRESS_EMOJI_GROUPS, MISTRESS_EMOJI_PRESETS } from "../lib/emojis";
 import DisciplineCosts from "../components/DisciplineCosts";
 import PunishmentWheel from "../components/PunishmentWheel";
 import {
@@ -85,45 +88,6 @@ function Spark({ data }: { data: number[] }) {
     </svg>
   );
 }
-
-
-const MISTRESS_EMOJI_PRESETS = [
-  { label: "Standard", value: "..🖤💅✨" },
-  { label: "Sur", value: "😡🖤💅✨" },
-  { label: "Arrogant", value: "😏👑💅✨" },
-  { label: "Dårligt svar", value: "..🤦‍♀️🙄🖤💅✨" },
-  { label: "Vær stille", value: "🤫🖤💅✨" },
-  { label: "Dressings", value: "👗🦋👜💅✨" },
-  { label: "Kick", value: "💨👢🍒💥" },
-  { label: "Lick!", value: "👢👅👅" },
-] as const;
-
-const EMOJI_GROUPS = [
-  {
-    label: "Faces",
-    emojis: "😀 😃 😄 😁 😆 😅 😂 🤣 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🫢 🫣 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫥 😏 😒 🙄 😬 😮‍💨 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 😵‍💫 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 🫤 😟 🙁 ☹️ 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 ☠️ 💩 🤡 👹 👺 👻 👽 👾 🤖".split(" "),
-  },
-  {
-    label: "Hands & body",
-    emojis: "👋 🤚 🖐️ ✋ 🖖 🫱 🫲 🫳 🫴 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 🫵 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🤝 🙏 ✍️ 💅 🤳 💪 🦾 🦿 🦵 🦶 👂 🦻 👃 🧠 🫀 🫁 🦷 🦴 👀 👁️ 👅 👄 🫦 💋".split(" "),
-  },
-  {
-    label: "Hearts & symbols",
-    emojis: "🖤 ❤️ 🧡 💛 💚 💙 💜 🤎 🤍 🩶 🩷 🩵 💔 ❤️‍🔥 ❤️‍🩹 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ☮️ ✝️ ☪️ 🕉️ ☸️ ✡️ 🔯 🕎 ☯️ ☦️ 🛐 ⛎ ♈ ♉ ♊ ♋ ♌ ♍ ♎ ♏ ♐ ♑ ♒ ♓ 🆔 ⚛️ 🉑 ☢️ ☣️ 📴 📳 🈶 🈚 🈸 🈺 🈷️ ✴️ 🆚 💮 🉐 ㊙️ ㊗️ 🈴 🈵 🈹 🈲 🅰️ 🅱️ 🆎 🆑 🅾️ 🆘 ❌ ⭕ 🛑 ⛔ 📛 🚫 💯 💢 ♨️ 🚷 🚯 🚳 🚱 🔞 📵 🚭 ❗ ❕ ❓ ❔ ‼️ ⁉️ 🔅 🔆 〽️ ⚠️ 🚸 🔱 ⚜️ 🔰 ♻️ ✅ 🈯 💹 ❇️ ✳️ ❎ 🌐 💠 Ⓜ️ 🌀 💤 🏧 🚾 ♿ 🅿️ 🈳 🈂️ 🛂 🛃 🛄 🛅 🚹 🚺 🚼 ⚧️ 🚻 🚮 🎦 📶 🈁 🔣 ℹ️ 🔤 🔡 🔠 🆖 🆗 🆙 🆒 🆕 🆓 0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟".split(" "),
-  },
-  {
-    label: "Power",
-    emojis: "👑 💎 🗝️ ⛓️ 🔒 🔓 🕯️ 🪞 🪄 ✨ 🌟 💫 ⚡ 🔥 🩸 🧿 🪬 🦋 🕸️ 🕷️ 🐍 🦂 🐈‍⬛ 🦇 🦢 🌹 🥀 🍒 🍓 🍷 🥂 🍾 🧊 🎀 🎁 🪩 🎭 🎪 🎯 🏆 🥇 🏅 🎖️ 🧨 💥 💨".split(" "),
-  },
-  {
-    label: "Clothes & objects",
-    emojis: "👠 👡 👢 🥿 👞 👟 🩰 🧦 🧤 👜 👛 🎒 👝 👗 👙 🩱 👘 🥻 👚 👕 👖 🧥 🧣 👒 🎩 🧢 ⛑️ 📿 💄 💍 💼 🕶️ 👓 🪭 🧸 🛏️ 🪑 🚪 🪟 🧼 🧴 🧽 🪣 🧹 🧺 🪠 🧻 🪒 🧷 🪡 🧵 ✂️ 📌 📍 📝 ✉️ 📲 📷 🎥 🎙️ 🎧 🔔 🔕 📣".split(" "),
-  },
-  {
-    label: "Animals & nature",
-    emojis: "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐻‍❄️ 🐨 🐯 🦁 🐮 🐷 🐽 🐸 🐵 🙈 🙉 🙊 🐒 🐔 🐧 🐦 🐤 🐣 🐥 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🪲 🐞 🦋 🐌 🐛 🦟 🦗 🕷️ 🦂 🐢 🐍 🦎 🦖 🦕 🐙 🦑 🦐 🦞 🦀 🪼 🐡 🐠 🐟 🐬 🐳 🐋 🦈 🦭 🐊 🐅 🐆 🦓 🦍 🦧 🦣 🐘 🦛 🦏 🐪 🐫 🦒 🦘 🦬 🐃 🐂 🐄 🐎 🐖 🐏 🐑 🦙 🐐 🦌 🫎 🐕 🐩 🦮 🐕‍🦺 🐈 🐈‍⬛ 🪶 🐓 🦃 🦤 🦚 🦜 🦢 🦩 🕊️ 🐇 🦝 🦨 🦡 🦫 🦦 🦥 🐁 🐀 🐿️ 🦔 🌵 🎄 🌲 🌳 🌴 🪵 🌱 🌿 ☘️ 🍀 🎍 🪴 🎋 🍃 🍂 🍁 🍄 🪨 🐚 🪸 🌾 💐 🌷 🌹 🥀 🪻 🪷 🌺 🌸 🌼 🌻".split(" "),
-  },
-] as const;
 
 function SlaveCard({ s, on, onClick, avatar }: { s: Slave; on: boolean; onClick: () => void; avatar: string }) {
   const debt = attentionDebt(s);
@@ -210,7 +174,7 @@ function Thread({ slave }: { slave: Slave }) {
   const [text, setText] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [unread, setUnread] = useState(0);
@@ -265,14 +229,11 @@ function Thread({ slave }: { slave: Slave }) {
 
   const insertSnippet = (snippet: string) => {
     const input = inputRef.current;
-    const start = input?.selectionStart ?? text.length;
-    const end = input?.selectionEnd ?? text.length;
-    const next = `${text.slice(0, start)}${snippet}${text.slice(end)}`;
+    const { next, caret } = insertAtCaret(text, snippet, input?.selectionStart ?? text.length, input?.selectionEnd ?? text.length);
     setText(next);
     setTyping(slave.id, "mistress", next.trim().length > 0);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
-      const caret = start + snippet.length;
       inputRef.current?.setSelectionRange(caret, caret);
     });
   };
@@ -310,7 +271,7 @@ function Thread({ slave }: { slave: Slave }) {
             return (
               <div
                 key={m.id}
-                className={`rounded-lg border-l-2 px-3 py-2 text-[12px] leading-relaxed ${
+                className={`whitespace-pre-wrap rounded-lg border-l-2 px-3 py-2 text-[12px] leading-relaxed ${
                   m.kind === "refusal" ? "border-rose-400/70 bg-rose-500/8 text-rose-100/85" : "border-white/20 bg-white/[0.03] text-white/55"
                 }`}
               >
@@ -341,7 +302,7 @@ function Thread({ slave }: { slave: Slave }) {
                   </div>
                 )}
                 <div
-                  className={`text-[12.5px] leading-snug italic ${m.title ? "mt-1" : ""} ${
+                  className={`text-[12.5px] leading-snug whitespace-pre-wrap italic ${m.title ? "mt-1" : ""} ${
                     m.from === "mistress" ? "text-brass-soft/90" : "text-white/60"
                   }`}
                 >
@@ -510,7 +471,7 @@ function Thread({ slave }: { slave: Slave }) {
                   </div>
                 )}
                 {m.text && (
-                  <p className="mt-2 text-[12.5px] text-white/70">
+                  <p className="mt-2 whitespace-pre-wrap text-[12.5px] text-white/70">
                     <Linkify text={m.text} />
                   </p>
                 )}
@@ -539,7 +500,7 @@ function Thread({ slave }: { slave: Slave }) {
               <div className={`flex w-full items-end gap-2 ${mine ? "justify-end" : "justify-start"}`}>
                 {!mine && <SlaveAvatar size={28} src={avatarFor(slave, dungeon)} name={slave.name} />}
                 <div
-                  className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-snug [overflow-wrap:anywhere] ${
+                  className={`max-w-[78%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-snug [overflow-wrap:anywhere] ${
                     mine
                       ? "font-display rounded-br-md border border-brass/25 bg-gradient-to-br from-brass/25 to-brass/10 text-brass-soft"
                       : "rounded-bl-md border border-white/10 bg-white/[0.05] text-white/80"
@@ -572,79 +533,41 @@ function Thread({ slave }: { slave: Slave }) {
 
       <div className="border-t border-white/8 bg-[#080508]/88 p-3 backdrop-blur">
         {emojiOpen && (
-          <div className="mb-3 rounded-2xl border border-brass/25 bg-[#0c0810]/95 p-3 shadow-[0_-18px_50px_-28px_rgba(0,0,0,.95)]">
-            <div className="flex items-center gap-2">
-              <span className="label">Mistress favourites</span>
-              <span className="flex-1" />
-              <button
-                onClick={() => setEmojiOpen(false)}
-                className="rounded-full px-2 text-[13px] text-white/35 transition hover:bg-white/8 hover:text-white/70"
-                title="Close emoji panel"
-              >
-                ×
-              </button>
-            </div>
-            <div className="thin-scroll mt-2 flex gap-1.5 overflow-x-auto pb-1">
-              {MISTRESS_EMOJI_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => insertSnippet(p.value)}
-                  title={p.value}
-                  className="shrink-0 rounded-full border border-brass/35 bg-brass/10 px-3 py-1.5 text-[11px] text-brass-soft transition hover:border-brass/70 hover:bg-brass/18"
-                >
-                  <span className="mr-1.5 font-mono text-[9.5px] text-white/45">{p.label}</span>
-                  {p.value}
-                </button>
-              ))}
-            </div>
-
-            <div className="thin-scroll mt-3 max-h-44 space-y-3 overflow-y-auto pr-1">
-              {EMOJI_GROUPS.map((group) => (
-                <div key={group.label}>
-                  <div className="mb-1.5 font-mono text-[9px] tracking-[0.16em] text-white/30 uppercase">{group.label}</div>
-                  <div className="grid grid-cols-8 gap-1 sm:grid-cols-12">
-                    {group.emojis.map((emoji) => (
-                      <button
-                        key={`${group.label}-${emoji}`}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => insertSnippet(emoji)}
-                        className="rounded-lg border border-white/8 bg-white/[0.025] py-1.5 text-[18px] transition hover:border-brass/45 hover:bg-brass/10"
-                        title={emoji}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <EmojiPanel
+            title="Mistress favourites"
+            presets={MISTRESS_EMOJI_PRESETS}
+            groups={MISTRESS_EMOJI_GROUPS}
+            onPick={insertSnippet}
+            onClose={() => setEmojiOpen(false)}
+          />
         )}
 
-        <div className="flex gap-2">
-          <input
+        <div className="flex items-end gap-2">
+          <ChatInput
             ref={inputRef}
             value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              setTyping(slave.id, "mistress", e.target.value.trim().length > 0);
+            onChange={(v) => {
+              setText(v);
+              setTyping(slave.id, "mistress", v.trim().length > 0);
             }}
             onBlur={() => setTyping(slave.id, "mistress", false)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder={`Address ${slave.name}…`}
-            className="min-w-0 flex-1 rounded-full border border-white/12 bg-black/40 px-4 py-2.5 text-[14px] outline-none focus:border-brass/50"
+            onSubmit={send}
+            placeholder={`Address ${slave.name}…  (⇧⏎ for a new paragraph)`}
+            className="border-white/12 bg-black/40 py-2.5 text-[14px] focus:border-brass/50"
           />
           <button
             onClick={() => setEmojiOpen((v) => !v)}
             title="Emoji & favourites"
-            className={`rounded-full border px-3 text-[16px] transition ${
+            className={`shrink-0 rounded-3xl border px-3 py-2.5 text-[16px] transition ${
               emojiOpen ? "border-brass/65 bg-brass/18 text-brass-soft" : "border-white/12 bg-black/35 text-white/65 hover:border-brass/45 hover:text-brass-soft"
             }`}
           >
             😊
           </button>
-          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
+          <button
+            onClick={send}
+            className="shrink-0 rounded-3xl border border-brass/45 bg-brass/15 px-5 py-2.5 text-[13px] text-brass-soft"
+          >
             Send
           </button>
         </div>
