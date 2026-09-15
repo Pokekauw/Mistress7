@@ -7,6 +7,8 @@ import MediaComposer from "../components/MediaComposer";
 import ImagePicker from "../components/ImagePicker";
 import BgPicker from "../components/BgPicker";
 import Billing from "../components/Billing";
+import ChessGame from "../components/ChessGame";
+import ChessSetupModal from "../components/ChessSetupModal";
 import { fsFetchInvite, fsPurgeLegacy, INVITE_TTL, inviteLink, inviteStatus, type Invite } from "../lib/invites";
 import { planRequiredFor } from "../lib/plans";
 import { botUrl, resolveBotUsername } from "../lib/telegram";
@@ -19,11 +21,14 @@ import DisciplineCosts from "../components/DisciplineCosts";
 import PunishmentWheel from "../components/PunishmentWheel";
 import {
   ACCESS_LOOK,
+  abandonChessGame,
   attentionDebt,
   attentionDeadline,
   avatarFor,
   bgStyle,
   chatBgFor,
+  chessGameFor,
+  chessMove,
   clearChat,
   DEFAULT_BG,
   has,
@@ -34,6 +39,7 @@ import {
   CHECKIN_WINDOWS,
   rotateAccessCode,
   setAccess,
+  startChessGame,
   type AccessState,
   attachmentUrl,
   COMMANDS,
@@ -207,10 +213,11 @@ function Thread({ slave }: { slave: Slave }) {
     [all, slave.id]
   );
   const dungeon = useStore((s) => s.dungeon);
+  const chess = useStore((s) => chessGameFor(s, slave.id));
   const [text, setText] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [unread, setUnread] = useState(0);
@@ -284,6 +291,14 @@ function Thread({ slave }: { slave: Slave }) {
     setEmojiOpen(false);
     setTyping(slave.id, "mistress", false);
   };
+
+  // auto-grow the textarea with content
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(140, el.scrollHeight) + "px";
+  }, [text]);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col" style={bgStyle(chatBgFor(slave, dungeon))}>
@@ -558,6 +573,25 @@ function Thread({ slave }: { slave: Slave }) {
           );
         })}
 
+        {chess && (
+          <div className="flex justify-start">
+            <div className="w-full max-w-[88%] rounded-2xl border border-brass/25 bg-black/40 p-3 sm:max-w-[420px]">
+              <ChessGame
+                game={chess}
+                viewer="mistress"
+                onMove={(from, to, promotion) => {
+                  const r = chessMove(slave.id, from, to, promotion);
+                  if (!r.ok && r.error) {
+                    // only surface non-endgame errors (endgame events trigger their own messages)
+                    if (r.error !== "illegal move") console.debug("chess move:", r.error);
+                  }
+                }}
+                onAbandon={() => abandonChessGame(slave.id)}
+              />
+            </div>
+          </div>
+        )}
+
         {heIsWriting && <TypingDots label={slave.name} align="left" />}
       </div>
 
@@ -622,29 +656,36 @@ function Thread({ slave }: { slave: Slave }) {
           </div>
         )}
 
-        <div className="flex gap-2">
-          <input
+        <div className="flex items-end gap-2">
+          <textarea
             ref={inputRef}
             value={text}
+            rows={1}
             onChange={(e) => {
               setText(e.target.value);
               setTyping(slave.id, "mistress", e.target.value.trim().length > 0);
             }}
             onBlur={() => setTyping(slave.id, "mistress", false)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder={`Address ${slave.name}…`}
-            className="min-w-0 flex-1 rounded-full border border-white/12 bg-black/40 px-4 py-2.5 text-[14px] outline-none focus:border-brass/50"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={`Address ${slave.name}…  (Shift+Enter for newline)`}
+            className="min-w-0 flex-1 resize-none rounded-[22px] border border-white/12 bg-black/40 px-4 py-2.5 text-[14px] leading-relaxed outline-none focus:border-brass/50"
+            style={{ maxHeight: 140 }}
           />
           <button
             onClick={() => setEmojiOpen((v) => !v)}
             title="Emoji & favourites"
-            className={`rounded-full border px-3 text-[16px] transition ${
+            className={`shrink-0 rounded-full border px-3 text-[16px] transition ${
               emojiOpen ? "border-brass/65 bg-brass/18 text-brass-soft" : "border-white/12 bg-black/35 text-white/65 hover:border-brass/45 hover:text-brass-soft"
             }`}
           >
             😊
           </button>
-          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
+          <button onClick={send} className="shrink-0 rounded-full border border-brass/45 bg-brass/15 px-5 py-2.5 text-[13px] text-brass-soft">
             Send
           </button>
         </div>
@@ -1351,12 +1392,14 @@ export default function Deck({ go }: { go: (r: string) => void }) {
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [strikeOpen, setStrikeOpen] = useState(false);
   const [wheelId, setWheelId] = useState<string | null>(null);
+  const [chessSetup, setChessSetup] = useState(false);
 
   const open = slaves.find((s) => s.id === openId) ?? null;
 
   const sorted = useMemo(() => [...slaves].sort((a, b) => attentionDebt(b) - attentionDebt(a)), [slaves]);
 
   const allMessages = useStore((s) => s.messages);
+  const activeChess = useStore((s) => s.chess || {});
 
   const queue = useMemo(() => {
     const q: { text: string; tone: string; meta: string; id?: string }[] = [];
@@ -1748,6 +1791,28 @@ export default function Deck({ go }: { go: (r: string) => void }) {
               </button>
               <button
                 onClick={() => {
+                  // One opponent — a selected slave, or the open chat
+                  const targets = sel.length ? sel : openId ? [openId] : [];
+                  if (targets.length !== 1) {
+                    flash("Select exactly one submissive to play against.", "red");
+                    return;
+                  }
+                  // If there's already an active game, just open the chat
+                  const g = activeChess[targets[0]];
+                  if (g && g.status === "active") {
+                    setOpenId(targets[0]);
+                    setSel([]);
+                    flash("♞ A game is already in progress with that submissive.");
+                    return;
+                  }
+                  setChessSetup(true);
+                }}
+                className="rounded-full border border-pink-400/45 bg-gradient-to-r from-pink-500/18 to-pink-400/8 px-3 py-1.5 text-[11.5px] font-medium text-pink-100 transition hover:from-pink-500/30"
+              >
+                <span className="mr-1.5">♞</span>Game time
+              </button>
+              <button
+                onClick={() => {
                   if (
                     !confirm(
                       "🕊️ Freeze the entire house?\n\nEvery gag, chastity lock, penance and check-in will be cleared immediately, and tribute will be suspended for one hour.\n\nThis applies to all submissives at once."
@@ -1950,6 +2015,28 @@ export default function Deck({ go }: { go: (r: string) => void }) {
           onSent={(msg) => {
             flash(msg, "gold");
             setSel([]);
+          }}
+        />
+      )}
+
+      {/* chess setup modal */}
+      {chessSetup && (
+        <ChessSetupModal
+          slaveName={
+            (sel.length === 1 ? slaves.find((s) => s.id === sel[0])?.name : open?.name) || "sub"
+          }
+          onClose={() => setChessSetup(false)}
+          onStart={({ mistressColor, minutes, increment }) => {
+            const target = sel.length === 1 ? sel[0] : openId;
+            if (!target) {
+              setChessSetup(false);
+              return;
+            }
+            startChessGame(target, { mistressColor, minutes, increment });
+            setOpenId(target);
+            setSel([]);
+            setChessSetup(false);
+            flash(`♞ Game time set · ${minutes}+${increment}s · you play ${mistressColor === "w" ? "pink/white" : "gold/black"}`);
           }}
         />
       )}

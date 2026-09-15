@@ -7,6 +7,7 @@ import ConditionTimer from "../components/ConditionTimer";
 import StatusBanner from "../components/StatusBanner";
 import TelegramPanel from "../components/TelegramPanel";
 import TelegramInline from "../components/TelegramInline";
+import ChessGame from "../components/ChessGame";
 import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import Linkify from "../components/Linkify";
@@ -15,6 +16,8 @@ import {
   avatarFor,
   bgStyle,
   chatBgFor,
+  chessGameFor,
+  chessMove,
   completePenance,
   declineDemand,
   fileToAttachment,
@@ -22,6 +25,7 @@ import {
   isTyping,
   markThreadRead,
   openLocReq,
+  resignChessGame,
   reverseGeocode,
   setFixPlace,
   setTyping,
@@ -51,6 +55,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   const slave = useStore((s) => s.slaves.find((x) => x.id === slaveId) ?? null);
   const dungeon = useStore((s) => s.dungeon);
   const allMsgs = useStore((s) => s.messages);
+  const chess = useStore((s) => (slave ? chessGameFor(s, slave.id) : null));
   const msgs = useMemo(
     () => (slave ? allMsgs.filter((m) => m.slaveId === slave.id).sort((a, b) => a.time - b.time) : []),
     [allMsgs, slave]
@@ -58,6 +63,7 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [sheet, setSheet] = useState<
     null | "tribute" | "limits" | "proof" | "key" | "telegram" | "rules" | "guide"
   >(null);
@@ -212,6 +218,14 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
     }
     setText("");
   };
+
+  // auto-grow the composer textarea
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(140, el.scrollHeight) + "px";
+  }, [text]);
 
   const pay = (amount: number, demandId?: string) => {
     const r = payTribute(slave.id, amount, demandId);
@@ -679,6 +693,23 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
             );
             })}
 
+            {chess && (
+              <div className="flex justify-end">
+                <div className="w-full max-w-[88%] rounded-2xl border border-brass/25 bg-black/40 p-3 sm:max-w-[420px]">
+                  <ChessGame
+                    game={chess}
+                    viewer="sub"
+                    onMove={(from, to, promotion) => {
+                      chessMove(slave.id, from, to, promotion);
+                    }}
+                    onResign={() => {
+                      if (confirm("Resign the game? She wins.")) resignChessGame(slave.id);
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
             {sheIsWriting && <TypingDots label={dungeon.honorific} align="left" />}
           </div>
 
@@ -701,25 +732,30 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
         <TelegramInline slave={slave} />
 
         {/* composer — right under the chat so writing and reading stay together */}
-        <div className="mt-2 flex gap-2">
-          <input
+        <div className="mt-2 flex items-end gap-2">
+          <textarea
+            ref={inputRef}
             value={text}
+            rows={1}
             onChange={(e) => {
               setText(e.target.value);
               if (!gagged) setTyping(slave.id, "sub", e.target.value.trim().length > 0);
             }}
             onBlur={() => setTyping(slave.id, "sub", false)}
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              send();
-              setTyping(slave.id, "sub", false);
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+                setTyping(slave.id, "sub", false);
+              }
             }}
-            placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...`}
-            className={`flex-1 rounded-full border px-4 py-3 text-[15px] outline-none transition ${
+            placeholder={gagged ? "you are gagged — she decides when you may speak" : `speak to ${dungeon.honorific}...  (Shift+Enter for newline)`}
+            className={`min-w-0 flex-1 resize-none rounded-[22px] border px-4 py-3 text-[15px] leading-relaxed outline-none transition ${
               gagged ? "border-amber-400/50 bg-amber-500/10 text-amber-100 placeholder:text-amber-200/60" : "border-white/12 bg-black/40 focus:border-brass/50"
             }`}
+            style={{ maxHeight: 140 }}
           />
-          <button onClick={send} className="rounded-full border border-brass/45 bg-brass/15 px-5 text-[13px] text-brass-soft">
+          <button onClick={send} className="shrink-0 rounded-full border border-brass/45 bg-brass/15 px-5 py-3 text-[13px] text-brass-soft">
             Send
           </button>
         </div>

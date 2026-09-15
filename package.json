@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
+    "chess.js": "^1.4.0",
     "clsx": "2.1.1",
     "firebase": "^12.18.0",
     "react": "19.2.6",
