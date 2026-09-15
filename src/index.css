@@ -238,22 +238,60 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ---------- chess ♞ ---------- */
+/* The board is a static 8×8 lattice: every square is exactly one eighth of
+   the board, whether or not there is a piece on its rank. Three rules make
+   that hold no matter what the board is drawn inside:
+
+     1. the inline grid template pins both axes to `minmax(0,1fr)`, so the
+        tracks can never grow to fit their content (JSX);
+     2. the squares are told not to contribute a min-content size;
+     3. the piece glyph is a fixed, square-relative box instead of an
+        intrinsic text run.
+
+   Together they keep the board square and the squares identical, in the
+   small preview card in the chat as well as in the popped-out window. */
+.chess-root .chess-board {
+  /* the measuring stick for pieces and markers below */
+  container-type: inline-size;
+  /* one square is exactly an eighth of the board on both axes (it is 1:1) */
+  --chess-square: 12.5cqi;
+  /* pieces fill ~76% of their square, markers ~20% */
+  --chess-piece-size: min(calc(var(--chess-square) * 0.76), 46px);
+  --chess-mark: calc(var(--chess-square) * 0.2);
+  --chess-inset: calc(var(--chess-square) * 0.13);
+  --chess-ring: calc(var(--chess-square) * 0.075);
+}
+
+.chess-root .chess-board > button {
+  padding: 0;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  /* the square never takes its size from what stands on it */
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chess-piece {
   font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols2", "DejaVu Sans",
     "Quivira", serif;
   user-select: none;
   pointer-events: none;
   line-height: 1;
-  /* fallback for browsers without container query units — the component
-     overrides this with a size derived from the board width */
-  font-size: min(9vw, 44px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  /* plain fallback for a browser without container-query units: small enough
+     that a glyph can never outgrow the square it sits in */
+  font-size: 1.35rem;
 }
 
-/* the board is the measuring stick for its pieces, so a piece always fills
-   the same share of its square no matter how wide the board is drawn
-   (small preview card in the chat, tall window in the popup) */
-.chess-root .chess-board {
-  container-type: inline-size;
+/* relative to the board (container query) so the piece keeps the same share
+   of its square at every board size */
+.chess-root .chess-board .chess-piece {
+  font-size: var(--chess-piece-size);
 }
 
 /* popped-out game window: the board gets the whole stage */
@@ -275,12 +313,6 @@ input[type="range"]::-moz-range-thumb {
 
 .slave-piece {
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
-}
-
-.chess-root .chess-board button {
-  padding: 0;
-  appearance: none;
-  -webkit-tap-highlight-color: transparent;
 }
 
 .chess-root textarea,
