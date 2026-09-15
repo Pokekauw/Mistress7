@@ -7,7 +7,7 @@ import MediaComposer from "../components/MediaComposer";
 import ImagePicker from "../components/ImagePicker";
 import BgPicker from "../components/BgPicker";
 import Billing from "../components/Billing";
-import ChessGame from "../components/ChessGame";
+import ChessWindow from "../components/ChessWindow";
 import ChessSetupModal from "../components/ChessSetupModal";
 import { fsFetchInvite, fsPurgeLegacy, INVITE_TTL, inviteLink, inviteStatus, type Invite } from "../lib/invites";
 import { planRequiredFor } from "../lib/plans";
@@ -575,10 +575,11 @@ function Thread({ slave }: { slave: Slave }) {
 
         {chess && (
           <div className="flex justify-start">
-            <div className="w-full max-w-[88%] rounded-2xl border border-brass/25 bg-black/40 p-3 sm:max-w-[420px]">
-              <ChessGame
+            <div className="w-full max-w-[88%] sm:max-w-[360px]">
+              <ChessWindow
                 game={chess}
                 viewer="mistress"
+                opponentName={slave.name}
                 onMove={(from, to, promotion) => {
                   const r = chessMove(slave.id, from, to, promotion);
                   if (!r.ok && r.error) {
