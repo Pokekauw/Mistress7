@@ -244,6 +244,29 @@ input[type="range"]::-moz-range-thumb {
   user-select: none;
   pointer-events: none;
   line-height: 1;
+  /* fallback for browsers without container query units — the component
+     overrides this with a size derived from the board width */
+  font-size: min(9vw, 44px);
+}
+
+/* the board is the measuring stick for its pieces, so a piece always fills
+   the same share of its square no matter how wide the board is drawn
+   (small preview card in the chat, tall window in the popup) */
+.chess-root .chess-board {
+  container-type: inline-size;
+}
+
+/* popped-out game window: the board gets the whole stage */
+.chess-window-board {
+  margin-inline: auto;
+  width: 100%;
+  /* wide enough for adult fingers, capped so the pieces keep their share of
+     the square — and never taller than the screen */
+  max-width: min(100%, 460px, 58vh);
+}
+
+.chess-root-compact .chess-board button {
+  cursor: pointer;
 }
 
 .divine-piece {

@@ -7,7 +7,7 @@ import ConditionTimer from "../components/ConditionTimer";
 import StatusBanner from "../components/StatusBanner";
 import TelegramPanel from "../components/TelegramPanel";
 import TelegramInline from "../components/TelegramInline";
-import ChessGame from "../components/ChessGame";
+import ChessWindow from "../components/ChessWindow";
 import { GuideSheet, HouseRulesSheet } from "../components/Handbook";
 import { PresenceBar, ReadTicks, Stamp, TypingDots } from "../components/MessageMeta";
 import Linkify from "../components/Linkify";
@@ -695,10 +695,11 @@ export default function SubView({ slaveId, go }: { slaveId: string; go: (r: stri
 
             {chess && (
               <div className="flex justify-end">
-                <div className="w-full max-w-[88%] rounded-2xl border border-brass/25 bg-black/40 p-3 sm:max-w-[420px]">
-                  <ChessGame
+                <div className="w-full max-w-[88%] sm:max-w-[360px]">
+                  <ChessWindow
                     game={chess}
                     viewer="sub"
+                    opponentName={`${dungeon.honorific} ${dungeon.name}`}
                     onMove={(from, to, promotion) => {
                       chessMove(slave.id, from, to, promotion);
                     }}

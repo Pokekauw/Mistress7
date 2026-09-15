@@ -18,6 +18,16 @@ type Props = {
   onResign?: () => void;
   /** called when Mistress abandons / closes a game */
   onAbandon?: () => void;
+  /**
+   * Slim, chrome-free board used as the preview card inside the chat.
+   * Keeps both clocks, drops the header, move list and action buttons.
+   */
+  compact?: boolean;
+  /**
+   * `false` renders a read-only board (the chat preview card). The real,
+   * playable board lives in the popped-out game window. Defaults to `true`.
+   */
+  interactive?: boolean;
 };
 
 /**
@@ -129,6 +139,8 @@ export default function ChessGame({
   onMove,
   onResign,
   onAbandon,
+  compact = false,
+  interactive = true,
 }: Props) {
   useTick(500); // tick the clock
   const honorific = useStore((s) => s.dungeon.honorific);
@@ -155,7 +167,7 @@ export default function ChessGame({
   const viewerTurn = viewer === "mistress" ? isMistressTurn : !isMistressTurn;
 
   // Whose move it is right now (local viewer may move only on their turn).
-  const canMove = !isGameOver && viewerTurn && onMove;
+  const canMove = !isGameOver && viewerTurn && onMove && interactive;
 
   const [selected, setSelected] = useState<string | null>(null);
   const [promotion, setPromotion] = useState<{ from: string; to: string } | null>(null);
@@ -292,31 +304,35 @@ export default function ChessGame({
   }, [board, isCheck, turn, game.status]);
 
   return (
-    <div className="chess-root select-none">
-      {/* Captured / status bar */}
-      <div className="mb-2 flex items-center justify-between text-[11px]">
-        <div className="flex items-center gap-2">
-          <span className="label">♞ Game Time</span>
-          {game.timeControl && (
-            <span className="font-mono text-white/50">
-              {game.timeControl.minutes}+{game.timeControl.increment}s
-            </span>
-          )}
+    <div className={`chess-root select-none${compact ? " chess-root-compact" : ""}`}>
+      {/* Captured / status bar — the window carries its own title bar */}
+      {!compact && (
+        <div className="mb-2 flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-2">
+            <span className="label">♞ Game Time</span>
+            {game.timeControl && (
+              <span className="font-mono text-white/50">
+                {game.timeControl.minutes}+{game.timeControl.increment}s
+              </span>
+            )}
+          </div>
+          <span className="label">
+            {game.status === "active"
+              ? viewerTurn
+                ? "Your move"
+                : viewer === "mistress"
+                  ? `His move`
+                  : `Her move`
+              : "Finished"}
+          </span>
         </div>
-        <span className="label">
-          {game.status === "active"
-            ? viewerTurn
-              ? "Your move"
-              : viewer === "mistress"
-                ? `His move`
-                : `Her move`
-            : "Finished"}
-        </span>
-      </div>
+      )}
 
       {/* Opponent clock */}
       <div
-        className={`mb-1 flex items-center justify-between rounded-md border px-2.5 py-1 font-mono text-[12px] ${
+        className={`mb-1 flex items-center justify-between rounded-md border px-2.5 font-mono ${
+          compact ? "py-0.5 text-[11px]" : "py-1 text-[12px]"
+        } ${
           viewer === "mistress"
             ? "border-white/10 bg-white/5 text-white/70"
             : "border-brass/35 bg-brass/10 text-brass-soft"
@@ -350,6 +366,10 @@ export default function ChessGame({
                 <button
                   key={alg}
                   onClick={() => onSquareClick(alg, p)}
+                  disabled={!canMove}
+                  tabIndex={canMove ? undefined : -1}
+                  aria-label={`${alg}${p ? ` ${p}` : ""}`}
+                  data-square={alg}
                   className={`relative flex items-center justify-center transition ${canMove ? "cursor-pointer" : "cursor-default"}`}
                   style={{
                     background: isCheckSq ? "rgba(244,63,94,0.55)" : bg,
@@ -385,7 +405,10 @@ export default function ChessGame({
                     <span
                       className="chess-piece"
                       style={{
-                        fontSize: "min(9vw, 44px)",
+                        /* sized off the board width (container query) so the
+                           squares stay square — in the chat card AND in the
+                           popped-out window. index.css keeps a vw fallback. */
+                        fontSize: "min(9.5cqi, 46px)",
                         lineHeight: 1,
                         color: pieceStyle(p, ownerOf(game, p)).color,
                         textShadow: pieceStyle(p, ownerOf(game, p)).textShadow,
@@ -403,7 +426,9 @@ export default function ChessGame({
         {overlayText && (
           <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/70 backdrop-blur-sm">
             <div className="text-center">
-              <div className="font-display text-[1.6rem] text-brass-soft">{overlayText}</div>
+              <div className={`font-display text-brass-soft ${compact ? "text-[0.95rem] leading-tight" : "text-[1.6rem]"}`}>
+                {overlayText}
+              </div>
             </div>
           </div>
         )}
@@ -442,7 +467,9 @@ export default function ChessGame({
 
       {/* Viewer clock */}
       <div
-        className={`mt-1 flex items-center justify-between rounded-md border px-2.5 py-1 font-mono text-[12px] ${
+        className={`mt-1 flex items-center justify-between rounded-md border px-2.5 font-mono ${
+          compact ? "py-0.5 text-[11px]" : "py-1 text-[12px]"
+        } ${
           viewer === "mistress"
             ? "border-brass/45 bg-brass/15 text-brass-soft"
             : "border-white/15 bg-white/5 text-white/75"
@@ -454,8 +481,8 @@ export default function ChessGame({
         </span>
       </div>
 
-      {/* Move list */}
-      {game.moves.length > 0 && (
+      {/* Move list — the window only; the chat card stays small */}
+      {!compact && game.moves.length > 0 && (
         <div className="thin-scroll mt-2 max-h-24 overflow-y-auto rounded-md border border-white/8 bg-white/[0.025] p-2 font-mono text-[10.5px] leading-snug text-white/50">
           {game.moves
             .reduce<string[][]>((rows, m, i) => {
@@ -471,29 +498,31 @@ export default function ChessGame({
         </div>
       )}
 
-      {/* Actions */}
-      <div className="mt-2 flex gap-2">
-        {game.status === "active" && viewer === "sub" && onResign && (
-          <button
-            onClick={() => {
-              if (confirm("Resign the game? She wins.")) onResign();
-            }}
-            className="flex-1 rounded-md border border-rose-400/40 bg-rose-500/10 py-1.5 text-[11px] text-rose-200 transition hover:bg-rose-500/20"
-          >
-            Resign
-          </button>
-        )}
-        {viewer === "mistress" && onAbandon && (
-          <button
-            onClick={() => {
-              if (confirm("Abandon this game? It will be removed from the chat.")) onAbandon();
-            }}
-            className="flex-1 rounded-md border border-white/15 bg-white/5 py-1.5 text-[11px] text-white/55 transition hover:border-rose-400/40 hover:text-rose-200"
-          >
-            Abandon game
-          </button>
-        )}
-      </div>
+      {/* Actions — only reachable from the playable window */}
+      {!compact && (
+        <div className="mt-2 flex gap-2">
+          {game.status === "active" && viewer === "sub" && onResign && (
+            <button
+              onClick={() => {
+                if (confirm("Resign the game? She wins.")) onResign();
+              }}
+              className="flex-1 rounded-md border border-rose-400/40 bg-rose-500/10 py-1.5 text-[11px] text-rose-200 transition hover:bg-rose-500/20"
+            >
+              Resign
+            </button>
+          )}
+          {viewer === "mistress" && onAbandon && (
+            <button
+              onClick={() => {
+                if (confirm("Abandon this game? It will be removed from the chat.")) onAbandon();
+              }}
+              className="flex-1 rounded-md border border-white/15 bg-white/5 py-1.5 text-[11px] text-white/55 transition hover:border-rose-400/40 hover:text-rose-200"
+            >
+              Abandon game
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
