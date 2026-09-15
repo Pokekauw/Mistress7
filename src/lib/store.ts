@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { Chess } from "chess.js";
 import {
   fsCreateInvite,
   fsDeleteInvite,
@@ -103,7 +104,8 @@ export type MsgKind =
   | "proof"
   | "locreq"
   | "location"
-  | "media";
+  | "media"
+  | "chess";
 
 export type LockKind = "free" | "tribute" | "devotion";
 
@@ -169,6 +171,241 @@ export type Msg = {
   /** ritual meta, so both sides can show "+4 ♥" or "already earned today" */
   ritual?: { id: string; earned: boolean; dev: number };
 };
+
+/* ============================ chess ♞ ============================ */
+/**
+ * One chess game between Mistress and a single Slave. Stored under
+ * `state.chess[slaveId]`. Only one active game per slave at a time.
+ */
+export type ChessGame = {
+  id: string;
+  slaveId: string;
+  /** who sits on which side */
+  mistressColor: "w" | "b";
+  /** FEN of the current position */
+  fen: string;
+  /** SAN move history (e.g. "e4", "Nf6", "Bc4") */
+  moves: string[];
+  /** "w" | "b" is inferred from chess.turn(); status drives the overlay */
+  status: "active" | "checkmate" | "timeout" | "resign" | "draw" | "abandoned";
+  winner?: "mistress" | "sub" | null;
+  /** Fischer increment clock */
+  timeControl: { minutes: number; increment: number };
+  /** milliseconds remaining on each clock (post-increment already applied) */
+  whiteTimeMs: number;
+  blackTimeMs: number;
+  /** timestamp of the last move — clock delta computed from this */
+  lastMoveAt: number;
+  startedAt: number;
+};
+
+/** Return the active chess game for a slave, if any and not ended */
+export function chessGameFor(s: State, slaveId: string): ChessGame | null {
+  const g = s.chess?.[slaveId];
+  if (!g) return null;
+  if (g.status === "abandoned") return null;
+  return g;
+}
+
+export function startChessGame(
+  slaveId: string,
+  opts: { mistressColor: "w" | "b"; minutes: number; increment: number }
+) {
+  const slave = getSlave(slaveId);
+  if (!slave) return;
+  const baseMs = Math.max(1, opts.minutes) * 60_000;
+  const game: ChessGame = {
+    id: uid(),
+    slaveId,
+    mistressColor: opts.mistressColor,
+    fen: new Chess().fen(),
+    moves: [],
+    status: "active",
+    winner: null,
+    timeControl: { minutes: opts.minutes, increment: opts.increment },
+    whiteTimeMs: baseMs,
+    blackTimeMs: baseMs,
+    lastMoveAt: Date.now(),
+    startedAt: Date.now(),
+  };
+  update((s) => {
+    let next: State = {
+      ...s,
+      chess: { ...(s.chess || {}), [slaveId]: game },
+    };
+    const who = opts.mistressColor === "w" ? "white (pink)" : "black (gold)";
+    next = pushMsg(next, {
+      slaveId,
+      from: "mistress",
+      kind: "decree",
+      title: "Game Time · Chess",
+      text: `♞ A game of chess is set. She plays ${who}. Clock: ${opts.minutes} min + ${opts.increment}s. Do your best — she still wins.`,
+    });
+    return pushEvent(next, `♞ Game Time started with ${slave.name} · ${opts.minutes}+${opts.increment}s`, "gold");
+  });
+}
+
+/** Apply a move; detects checkmate / stalemate / flag fall automatically. */
+export function chessMove(slaveId: string, from: string, to: string, promotion?: string): { ok: boolean; error?: string } {
+  const g = state.chess?.[slaveId];
+  if (!g || g.status !== "active") return { ok: false, error: "no active game" };
+  const chess = new Chess();
+  try {
+    chess.load(g.fen);
+  } catch {
+    return { ok: false, error: "corrupt position" };
+  }
+  // Flag fall: has a player's clock run out?
+  const now = Date.now();
+  const elapsed = now - (g.lastMoveAt || now);
+  const whiteMs = Math.max(0, g.whiteTimeMs - (chess.turn() === "w" ? elapsed : 0));
+  const blackMs = Math.max(0, g.blackTimeMs - (chess.turn() === "b" ? elapsed : 0));
+  if (chess.turn() === "w" && whiteMs <= 0) {
+    endChessGame(slaveId, "timeout", g.mistressColor === "b" ? "mistress" : "sub");
+    return { ok: false, error: "white flagged" };
+  }
+  if (chess.turn() === "b" && blackMs <= 0) {
+    endChessGame(slaveId, "timeout", g.mistressColor === "w" ? "mistress" : "sub");
+    return { ok: false, error: "black flagged" };
+  }
+
+  // We trust the viewer; the chess engine will reject moves from the wrong side.
+  // Illegal moves are rejected by chess.move() below.
+  let move;
+  try {
+    move = chess.move({ from, to, promotion: (promotion || "q") as any });
+  } catch {
+    return { ok: false, error: "illegal move" };
+  }
+  if (!move) return { ok: false, error: "illegal move" };
+
+  // Apply clock increment for the side that just moved.
+  const incMs = (g.timeControl.increment || 0) * 1000;
+  const moverColor = chess.turn() === "w" ? "b" : "w"; // turn switched after move
+  const newElapsed = now - (g.lastMoveAt || now);
+  let whiteLeft = g.whiteTimeMs;
+  let blackLeft = g.blackTimeMs;
+  if (moverColor === "w") {
+    whiteLeft = Math.max(0, whiteLeft - newElapsed) + incMs;
+  } else {
+    blackLeft = Math.max(0, blackLeft - newElapsed) + incMs;
+  }
+
+  // End of game detection
+  let status: ChessGame["status"] = "active";
+  let winner: ChessGame["winner"] = null;
+  if (chess.isCheckmate()) {
+    status = "checkmate";
+    // side whose turn it is loses
+    winner = chess.turn() === "w" ? (g.mistressColor === "b" ? "mistress" : "sub") : g.mistressColor === "w" ? "mistress" : "sub";
+  } else if (chess.isStalemate() || chess.isDraw() || chess.isThreefoldRepetition()) {
+    status = "draw";
+  }
+
+  update((s) => {
+    const current = s.chess?.[slaveId];
+    if (!current) return s;
+    const nextGame: ChessGame = {
+      ...current,
+      fen: chess.fen(),
+      moves: [...current.moves, move.san],
+      status,
+      winner,
+      whiteTimeMs: whiteLeft,
+      blackTimeMs: blackLeft,
+      lastMoveAt: Date.now(),
+    };
+    let next: State = { ...s, chess: { ...(s.chess || {}), [slaveId]: nextGame } };
+    const slave = next.slaves.find((x) => x.id === slaveId);
+    if (status === "checkmate") {
+      next = pushMsg(next, {
+        slaveId,
+        from: "system",
+        kind: "decree",
+        title: "Checkmate",
+        text: winner === "mistress"
+          ? "♛ Checkmate. She wins. Kneel."
+          : "You have delivered checkmate. It will not happen again.",
+      });
+      if (winner === "mistress") {
+        next = mapSlave(next, slaveId, (x) => ({ ...x, devotion: Math.max(0, x.devotion - 4) }));
+      } else {
+        next = mapSlave(next, slaveId, (x) => ({ ...x, devotion: Math.min(100, x.devotion + 2) }));
+      }
+    } else if (status === "draw") {
+      next = pushMsg(next, {
+        slaveId,
+        from: "system",
+        kind: "decree",
+        title: "Draw",
+        text: "The game ends in stalemate. No winner — this time.",
+      });
+    }
+    if (status !== "active") {
+      next = pushEvent(
+        next,
+        `♞ Game over: ${slave?.name ?? "sub"} · ${status} · winner: ${winner ?? "draw"}`,
+        "muted"
+      );
+    }
+    return next;
+  });
+  return { ok: true };
+}
+
+export function resignChessGame(slaveId: string) {
+  endChessGame(slaveId, "resign", "mistress");
+}
+
+export function abandonChessGame(slaveId: string) {
+  endChessGame(slaveId, "abandoned", null);
+}
+
+function endChessGame(slaveId: string, status: ChessGame["status"], winner: ChessGame["winner"]) {
+  update((s) => {
+    const current = s.chess?.[slaveId];
+    if (!current) return s;
+    const nextGame: ChessGame = { ...current, status, winner };
+    let next: State = { ...s, chess: { ...(s.chess || {}), [slaveId]: nextGame } };
+    if (status !== "abandoned") {
+      next = pushMsg(next, {
+        slaveId,
+        from: "system",
+        kind: "decree",
+        title: "Game Over",
+        text:
+          status === "timeout"
+            ? winner === "mistress"
+              ? "⏰ Your clock has run out. She wins."
+              : "⏰ Her time expired."
+            : status === "resign"
+              ? "⛓️ Resignation accepted. She wins."
+              : "The game has concluded.",
+      });
+    }
+    return next;
+  });
+}
+
+/** Called every tick to detect flag fall on the active clock */
+export function sweepChessClocks() {
+  if (!state.chess) return;
+  const now = Date.now();
+  Object.values(state.chess).forEach((g) => {
+    if (!g || g.status !== "active") return;
+    const chess = new Chess();
+    try { chess.load(g.fen); } catch { return; }
+    const elapsed = now - (g.lastMoveAt || now);
+    const toMove = chess.turn();
+    const leftMs = toMove === "w" ? g.whiteTimeMs : g.blackTimeMs;
+    if (leftMs - elapsed <= 0) {
+      const winner = toMove === "w"
+        ? (g.mistressColor === "b" ? "mistress" : "sub")
+        : (g.mistressColor === "w" ? "mistress" : "sub");
+      endChessGame(g.slaveId, "timeout", winner);
+    }
+  });
+}
 
 export type { Invite } from "./invites";
 
@@ -275,6 +512,8 @@ export type State = {
   typing?: Record<string, TypingBeat>;
   /** when the Mistress's deck was last open — he is shown "last seen …" */
   mistressSeenAt?: number;
+  /** active chess games keyed by slaveId (one per slave at a time) */
+  chess?: Record<string, ChessGame>;
 };
 
 export type Session = { role: "mistress" | "sub" | null; slaveId: string | null };
@@ -603,6 +842,7 @@ function seed(): State {
     messages: [],
     invites: [],
     events: [],
+    chess: {},
   };
 }
 
@@ -618,6 +858,7 @@ export function normaliseState(s: State): State {
   return {
     ...s,
     invites,
+    chess: s.chess || {},
     /* presence & typing: Firestore's undefined→null cleaning can leave stray
        nulls behind, and a stale writer may leave a very old heartbeat */
     typing: s.typing || {},
@@ -744,11 +985,13 @@ export function useTick(ms = 1000) {
     const t = setInterval(() => {
       sweepLocationRequests();
       sweepAttentionDebt();
+      sweepChessClocks();
       set((n) => n + 1);
     }, ms);
     /* run once on mount, too — a debt may already be due when the app opens */
     sweepLocationRequests();
     sweepAttentionDebt();
+    sweepChessClocks();
     return () => clearInterval(t);
   }, [ms]);
 }
