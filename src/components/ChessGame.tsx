@@ -346,10 +346,17 @@ export default function ChessGame({
 
       {/* Board */}
       <div className="relative">
+        {/* The board is a rigid 8×8 lattice: the tracks are declared as
+            `minmax(0,1fr)` on *both* axes, so every square measures exactly
+            one eighth of the board — occupied or empty — and the square stays
+            square (the box is 1:1). Without the row template the rows were
+            content-sized, which made a rank with a piece on it twice as tall
+            as an empty one. */}
         <div
           className="chess-board grid overflow-hidden rounded-lg border border-white/15 shadow-2xl"
           style={{
             gridTemplateColumns: "repeat(8, minmax(0,1fr))",
+            gridTemplateRows: "repeat(8, minmax(0,1fr))",
             aspectRatio: "1 / 1",
           }}
         >
@@ -362,6 +369,7 @@ export default function ChessGame({
               const isSelected = selected === alg;
               const isDest = legalDests.has(alg);
               const isCheckSq = checkKingSquare === alg;
+              const pieceLook = p ? pieceStyle(p, ownerOf(game, p)) : null;
               return (
                 <button
                   key={alg}
@@ -387,32 +395,35 @@ export default function ChessGame({
                       {file}
                     </span>
                   )}
-                  {/* move dot */}
+                  {/* move dot / capture ring — sized off the square (cqi) so
+                      a marker looks the same in the tiny chat card as it does
+                      on the full board */}
                   {isDest && !p && (
                     <span
-                      className="block h-3 w-3 rounded-full"
-                      style={{ background: colors.highlight }}
+                      className="rounded-full"
+                      style={{
+                        background: colors.highlight,
+                        width: "var(--chess-mark)",
+                        height: "var(--chess-mark)",
+                      }}
                     />
                   )}
                   {isDest && p && (
                     <span
-                      className="absolute inset-1 rounded-full"
-                      style={{ boxShadow: `inset 0 0 0 3px ${colors.highlight}` }}
+                      className="absolute rounded-full"
+                      style={{
+                        inset: "var(--chess-inset)",
+                        boxShadow: `inset 0 0 0 var(--chess-ring) ${colors.highlight}`,
+                      }}
                     />
                   )}
-                  {/* piece */}
-                  {p && (
+                  {/* piece — the glyph box is fixed to the square (see
+                      .chess-piece in index.css), so a piece can never resize
+                      the rank it sits on */}
+                  {p && pieceLook && (
                     <span
                       className="chess-piece"
-                      style={{
-                        /* sized off the board width (container query) so the
-                           squares stay square — in the chat card AND in the
-                           popped-out window. index.css keeps a vw fallback. */
-                        fontSize: "min(9.5cqi, 46px)",
-                        lineHeight: 1,
-                        color: pieceStyle(p, ownerOf(game, p)).color,
-                        textShadow: pieceStyle(p, ownerOf(game, p)).textShadow,
-                      }}
+                      style={{ color: pieceLook.color, textShadow: pieceLook.textShadow }}
                     >
                       {PIECE_GLYPH[p]}
                     </span>
